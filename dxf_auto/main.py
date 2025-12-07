@@ -16,7 +16,8 @@ def main():
         level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.StreamHandler(sys.stdout)
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('dxf_auto_debug.log', encoding='utf-8')
         ]
     )
     logger = logging.getLogger(__name__)

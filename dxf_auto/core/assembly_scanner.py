@@ -189,30 +189,33 @@ class AssemblyScanner:
         sheet_part_info: Optional[SheetPartInfo] = None
         
         # Log for debugging
-        logger.debug(f"Checking part: {name or designation or file_path}, is_detail={part.is_detail}")
+        is_detail = part.is_detail
+        logger.debug(f"Checking part: '{name}' designation='{designation}' file='{file_path}'")
+        logger.debug(f"  is_detail={is_detail}, is_standard={part.is_standard}")
         
-        if part.is_detail:  # Only details can have sheet metal bodies
-            container = part.get_sheet_metal_container()
-            logger.debug(f"  Sheet metal container: {container is not None}")
-            if container:
-                has_sm = container.has_sheet_metal
-                logger.debug(f"  Has sheet metal: {has_sm}")
-                if has_sm:
-                    is_sheet_metal = True
-                    
-                    # Get sheet metal body info
-                    bodies = container.sheet_metal_bodies
-                    logger.debug(f"  Sheet metal bodies count: {len(bodies)}")
-                    if bodies:
-                        body = bodies[0]  # Usually one main sheet body
-                        sheet_part_info = self._create_sheet_part_info(
-                            part=part,
-                            body=body,
-                            level=level,
-                            parent_id=parent_id
-                        )
-                        sheet_part_info.id = node_id
-                        logger.info(f"Found sheet metal part: {name or designation}")
+        # Check for sheet metal regardless of is_detail to debug the issue
+        # In theory, only details should have sheet metal bodies, but let's check all parts
+        container = part.get_sheet_metal_container()
+        logger.debug(f"  Sheet metal container: {container is not None}")
+        if container:
+            has_sm = container.has_sheet_metal
+            logger.debug(f"  Has sheet metal: {has_sm}")
+            if has_sm:
+                is_sheet_metal = True
+                
+                # Get sheet metal body info
+                bodies = container.sheet_metal_bodies
+                logger.debug(f"  Sheet metal bodies count: {len(bodies)}")
+                if bodies:
+                    body = bodies[0]  # Usually one main sheet body
+                    sheet_part_info = self._create_sheet_part_info(
+                        part=part,
+                        body=body,
+                        level=level,
+                        parent_id=parent_id
+                    )
+                    sheet_part_info.id = node_id
+                    logger.info(f"Found sheet metal part: {name or designation}")
         
         # Create node
         node = AssemblyNode(

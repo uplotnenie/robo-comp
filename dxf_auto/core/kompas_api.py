@@ -564,8 +564,11 @@ class Part3D:
     def is_detail(self) -> bool:
         """Check if this is a detail (not a subassembly)."""
         try:
-            return bool(self._part.Detail)
-        except:
+            result = bool(self._part.Detail)
+            logger.debug(f"Part.Detail property: {result}")
+            return result
+        except Exception as e:
+            logger.debug(f"Failed to get Detail property: {e}, assuming True")
             return True
     
     @property
@@ -584,13 +587,19 @@ class Part3D:
             parts_collection = self._part.Parts
             if parts_collection:
                 count = parts_collection.Count
+                logger.debug(f"Parts collection has {count} items")
                 for i in range(count):
                     try:
                         part = parts_collection.Part(i)
                         if part:
-                            result.append(Part3D(part))
-                    except:
+                            child = Part3D(part)
+                            logger.debug(f"  Child part[{i}]: name='{child.name}', marking='{child.marking}'")
+                            result.append(child)
+                    except Exception as e:
+                        logger.debug(f"  Error getting part[{i}]: {e}")
                         continue
+            else:
+                logger.debug("Parts collection is None (leaf part)")
         except Exception as e:
             logger.debug(f"Failed to get parts collection: {e}")
         return result
@@ -607,6 +616,8 @@ class Part3D:
         """
         Get sheet metal container for accessing sheet metal bodies.
         
+        Uses ISheetMetalContainer interface which is inherited by IPart7.
+        
         Returns:
             SheetMetalContainer or None if not a sheet metal part
         """
@@ -614,23 +625,49 @@ class Part3D:
             return self._sheet_metal_container
         
         try:
+            # Log all available properties for debugging
+            logger.debug(f"Checking SheetMetalBodies for part: {self.name or self.marking or self.file_name}")
+            
             # Try to access SheetMetalBodies property directly
-            # This is the most reliable way to detect sheet metal parts
-            bodies = self._part.SheetMetalBodies
+            # IPart7 inherits from ISheetMetalContainer which has this property
+            bodies = None
+            
+            # Method 1: Direct property access
+            try:
+                bodies = self._part.SheetMetalBodies
+                logger.debug(f"  SheetMetalBodies via direct access: {bodies is not None}")
+            except AttributeError as e:
+                logger.debug(f"  SheetMetalBodies via direct access failed: {e}")
+            except Exception as e:
+                logger.debug(f"  SheetMetalBodies error: {type(e).__name__}: {e}")
+            
+            # Method 2: Try GetSheetMetalBodies method (automation alternative syntax)
+            if bodies is None:
+                try:
+                    bodies = self._part.GetSheetMetalBodies()
+                    logger.debug(f"  SheetMetalBodies via GetSheetMetalBodies(): {bodies is not None}")
+                except AttributeError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"  GetSheetMetalBodies() error: {type(e).__name__}: {e}")
+            
             if bodies is not None:
                 try:
                     count = bodies.Count
+                    logger.debug(f"  SheetMetalBodies.Count = {count}")
                     if count > 0:
-                        logger.debug(f"Found {count} sheet metal bodies in part")
+                        logger.info(f"Found {count} sheet metal bodies in part: {self.name or self.marking}")
                         self._sheet_metal_container = SheetMetalContainer(self._part)
                         return self._sheet_metal_container
+                    else:
+                        logger.debug(f"  SheetMetalBodies collection is empty")
                 except Exception as e:
-                    logger.debug(f"Error getting sheet metal bodies count: {e}")
-        except AttributeError:
-            # SheetMetalBodies property doesn't exist - not a sheet metal part
-            logger.debug("Part doesn't have SheetMetalBodies property")
+                    logger.debug(f"  Error getting Count: {type(e).__name__}: {e}")
+            else:
+                logger.debug(f"  SheetMetalBodies property is None - not a sheet metal part")
+                
         except Exception as e:
-            logger.debug(f"Error checking sheet metal: {e}")
+            logger.debug(f"Error in get_sheet_metal_container: {type(e).__name__}: {e}")
         
         return None
     
