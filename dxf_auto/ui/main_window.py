@@ -340,6 +340,8 @@ class MainWindow:
         
         # Подключение в отдельном потоке
         def connect_thread():
+            import pythoncom
+            pythoncom.CoInitialize()
             try:
                 from core import KompasConnection
                 self._kompas_connection = KompasConnection()
@@ -349,6 +351,8 @@ class MainWindow:
             except Exception as e:
                 # Bind exception into default arg so it's captured correctly
                 self.root.after(0, lambda e=e: self._on_connection_failed(str(e)))
+            finally:
+                pythoncom.CoUninitialize()
                 
         thread = threading.Thread(target=connect_thread, daemon=True)
         thread.start()
@@ -396,6 +400,8 @@ class MainWindow:
         self.lbl_status.configure(text="Сканирование...")
         
         def scan_thread():
+            import pythoncom
+            pythoncom.CoInitialize()
             try:
                 # Получение активного документа
                 if self._kompas_api is None:
@@ -423,6 +429,8 @@ class MainWindow:
             except Exception as e:
                 # Bind exception into default arg so it's captured correctly when callback runs
                 self.root.after(0, lambda e=e: self._on_scan_error(str(e)))
+            finally:
+                pythoncom.CoUninitialize()
                 
         thread = threading.Thread(target=scan_thread, daemon=True)
         thread.start()
