@@ -193,6 +193,10 @@ class AssemblyScanner:
         logger.debug(f"Checking part: '{name}' designation='{designation}' file='{file_path}'")
         logger.debug(f"  is_detail={is_detail}, is_standard={part.is_standard}")
         
+        # Debug COM object info for first few parts
+        if progress.current <= 3:
+            part._debug_com_info()
+        
         # Check for sheet metal regardless of is_detail to debug the issue
         # In theory, only details should have sheet metal bodies, but let's check all parts
         container = part.get_sheet_metal_container()
