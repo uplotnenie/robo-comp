@@ -347,7 +347,8 @@ class MainWindow:
                 self.root.after(0, self._on_connected)
                     
             except Exception as e:
-                self.root.after(0, lambda: self._on_connection_failed(str(e)))
+                # Bind exception into default arg so it's captured correctly
+                self.root.after(0, lambda e=e: self._on_connection_failed(str(e)))
                 
         thread = threading.Thread(target=connect_thread, daemon=True)
         thread.start()
@@ -415,11 +416,13 @@ class MainWindow:
                     return
                 sheet_parts_list = assembly_node.get_all_sheet_parts()
                 sheet_parts = {sp.id: sp for sp in sheet_parts_list}
-                
-                self.root.after(0, lambda: self._on_scan_complete(assembly_node, sheet_parts))
+
+                # Bind results into lambda defaults to avoid late-binding/free-variable issues
+                self.root.after(0, lambda a=assembly_node, s=sheet_parts: self._on_scan_complete(a, s))
                 
             except Exception as e:
-                self.root.after(0, lambda: self._on_scan_error(str(e)))
+                # Bind exception into default arg so it's captured correctly when callback runs
+                self.root.after(0, lambda e=e: self._on_scan_error(str(e)))
                 
         thread = threading.Thread(target=scan_thread, daemon=True)
         thread.start()
