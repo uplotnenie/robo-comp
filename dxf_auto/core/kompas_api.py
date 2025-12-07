@@ -420,12 +420,22 @@ class KompasDocument:
         """
         Rebuild/update the document.
         
+        For 3D documents, uses ksCM3DRebuild command.
+        The document must be active before calling this method.
+        
         Returns:
             True if rebuilt successfully
         """
         try:
-            self._doc.RebuildDocument()
-            return True
+            # Get the Application object from the document
+            app = self._doc.Application
+            if app is None:
+                logger.debug("Cannot get Application from document for rebuild")
+                return False
+            
+            # Execute rebuild command (ksCM3DRebuild = 40356)
+            result = app.ExecuteKompasCommand(KompasCommand.REBUILD_3D, False)
+            return bool(result)
         except Exception as e:
             logger.debug(f"Failed to rebuild document: {e}")
             return False

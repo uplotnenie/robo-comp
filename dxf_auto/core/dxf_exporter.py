@@ -369,15 +369,14 @@ class DXFExporter:
     
     def _export_via_2d_fragment(self, doc: KompasDocument, output_path: Path) -> bool:
         """
-        Export 3D flat pattern via 2D fragment with associative view.
+        Export 3D flat pattern via 2D fragment using ksCMCreateSheetFromModel command.
         
         Process:
-        1. Activate the 3D document
-        2. Create a new 2D fragment
-        3. Add an associative view projecting from the 3D model
-        4. Set view to "Top" projection (for flat pattern visibility)
-        5. Save fragment as DXF
-        6. Close fragment
+        1. Ensure 3D document is active and rebuilt
+        2. Create a new 2D fragment (this will be the target for 2D geometry)
+        3. Execute ksCMCreateSheetFromModel command (with 3D doc active)
+        4. Save fragment as DXF
+        5. Close fragment
         
         Args:
             doc: 3D document with straightened flat pattern
@@ -392,71 +391,25 @@ class DXFExporter:
             doc.activate()
             
             # Rebuild to ensure straightened state is applied
-            doc.rebuild()
+            if not doc.rebuild():
+                logger.debug("Rebuild returned false, continuing anyway")
             
-            # Get the 3D document path for associative view
+            # Get the 3D document path for logging
             source_path = doc.path_name
-            if not source_path:
-                logger.error("Source document has no path")
-                return False
+            logger.debug(f"Exporting flat pattern from: {source_path}")
             
-            logger.debug(f"Creating associative view from: {source_path}")
-            
-            # Create new 2D fragment (visible for proper projection creation)
+            # Create new 2D fragment (visible for proper export)
+            # This fragment will receive the 2D geometry from the command
             fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=True)
             if fragment is None:
                 logger.error("Failed to create 2D fragment")
                 return False
             
-            # Activate fragment for view creation
-            fragment.activate()
+            logger.debug(f"Created 2D fragment for export")
             
-            # Get 2D document interface
-            doc_2d = fragment.get_2d_document()
-            if doc_2d is None:
-                logger.error("Failed to get 2D document interface")
-                return False
-            
-            # Get views and layers manager
-            vlm = doc_2d.views_and_layers_manager
-            if vlm is None:
-                logger.error("Failed to get ViewsAndLayersManager")
-                return False
-            
-            # Get views collection
-            views_collection = vlm.views_collection
-            if views_collection is None:
-                logger.error("Failed to get ViewsCollection")
-                return False
-            
-            # Add associative view
-            assoc_view = views_collection.add_associative_view()
-            if assoc_view is None:
-                logger.warning("Failed to add associative view, trying alternative method")
-                # Alternative: Try using the ksCMCreateSheetFromModel command
-                return self._export_via_command(doc, fragment, output_path)
-            
-            # Configure associative view
-            assoc_view.set_source_file(source_path)
-            assoc_view.set_projection("Сверху")  # "Top" view in Russian
-            assoc_view.set_position(0.0, 0.0)
-            assoc_view.set_scale(1.0)
-            assoc_view.set_angle(0.0)
-            assoc_view.set_hidden_lines(False)  # Don't show hidden lines
-            
-            # Update view to generate 2D geometry
-            if not assoc_view.update():
-                logger.warning("View update may have failed")
-            
-            # Save fragment as DXF
-            success = fragment.save_as(str(output_path))
-            
-            if success:
-                logger.info(f"Successfully exported DXF: {output_path}")
-            else:
-                logger.error("Failed to save fragment as DXF")
-            
-            return success
+            # Use command-based export
+            # The command projects the active 3D model into the last created 2D document
+            return self._export_via_command(doc, fragment, output_path)
             
         except Exception as e:
             logger.exception(f"Fragment export error: {e}")
@@ -477,39 +430,49 @@ class DXFExporter:
         output_path: Path
     ) -> bool:
         """
-        Export using KOMPAS command as fallback.
+        Export using KOMPAS command.
         
         This method uses the ksCMCreateSheetFromModel command to create
-        2D geometry from the active 3D model.
+        2D geometry from the active 3D model into the last created 2D fragment.
+        
+        IMPORTANT: The 3D document MUST be active when executing the command.
+        The command projects the 3D model into the most recently created 2D document.
         
         Args:
-            doc: 3D document (must be active and visible)
-            fragment: 2D fragment to receive geometry
+            doc: 3D document (must be visible, will be activated)
+            fragment: 2D fragment to receive geometry (already created)
             output_path: Output file path
             
         Returns:
             True if successful
         """
         try:
-            # Activate the 3D document
+            # CRITICAL: Activate the 3D document BEFORE executing command
+            # The command works on the ACTIVE 3D model
             doc.activate()
+            logger.debug(f"Activated 3D document: {doc.name}")
             
-            # Check if command is available
+            # Check if command is available (3D doc must be active for this check)
             if not self._api.is_command_available(KompasCommand.CREATE_SHEET_FROM_MODEL):
-                logger.warning("CreateSheetFromModel command not available")
+                logger.warning("CreateSheetFromModel command not available (is 3D doc active?)")
                 return False
             
-            # Activate fragment
-            fragment.activate()
-            
-            # Execute command to create sketch from model
+            # Execute command WHILE 3D document is still active
+            # The command creates 2D sketch from active 3D model into the last created 2D document
             result = self._api.execute_command(KompasCommand.CREATE_SHEET_FROM_MODEL, False)
             
             if not result:
                 logger.warning("CreateSheetFromModel command may have failed")
             
+            # NOW activate the fragment to save it
+            fragment.activate()
+            logger.debug(f"Activated fragment for save")
+            
             # Save as DXF
-            return fragment.save_as(str(output_path))
+            success = fragment.save_as(str(output_path))
+            if success:
+                logger.info(f"Successfully exported DXF: {output_path}")
+            return success
             
         except Exception as e:
             logger.error(f"Command export error: {e}")
