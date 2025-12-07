@@ -556,9 +556,10 @@ class MainWindow:
         if part:
             self._show_part_details(part)
             
-    def _show_part_details(self, part: 'SheetPart'):
+    def _show_part_details(self, part: 'SheetPartInfo'):
         """Показ деталей детали."""
-        info = part.info
+        # part is SheetPartInfo, not SheetPart wrapper
+        info = part
         
         details = (
             f"Наименование: {info.name or '—'}\n"

@@ -69,11 +69,6 @@ class SheetPartInfo:
         return self.designation or self.name or self.file_name or "Unknown"
     
     @property
-    def part_id(self) -> str:
-        """Get unique part ID (alias for id for consistency with other classes)."""
-        return self.id
-    
-    @property
     def thickness_str(self) -> str:
         """Get thickness as formatted string."""
         if self.thickness > 0:

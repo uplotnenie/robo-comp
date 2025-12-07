@@ -308,8 +308,9 @@ class ExportDialog(tk.Toplevel):
             if self.is_cancelled:
                 self._log("Экспорт отменён пользователем", 'warning')
                 break
-                
-            part_name = part.info.name or part.info.designation or f"Деталь {i+1}"
+            
+            # part is SheetPartInfo, access properties directly
+            part_name = part.name or part.designation or f"Деталь {i+1}"
             self._log(f"Экспорт: {part_name}")
             
             start_time = time.time()
@@ -326,7 +327,7 @@ class ExportDialog(tk.Toplevel):
                 export_time = time.time() - start_time
                 
                 result = ExportResult(
-                    part_id=part.part_id,
+                    part_id=part.id,
                     part_name=part_name,
                     output_path=output_path,
                     success=True,
@@ -339,7 +340,7 @@ class ExportDialog(tk.Toplevel):
                 export_time = time.time() - start_time
                 
                 result = ExportResult(
-                    part_id=part.part_id,
+                    part_id=part.id,
                     part_name=part_name,
                     output_path="",
                     success=False,

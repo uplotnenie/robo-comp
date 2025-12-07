@@ -143,22 +143,22 @@ class SheetTable(ttk.Frame):
         self.table.bind('<<TreeviewSelect>>', self._on_selection_change)
         self.table.bind('<Double-1>', self._on_double_click)
         
-    def load_parts(self, parts: List['SheetPart']):
+    def load_parts(self, parts: List['SheetPartInfo']):
         """
         Загрузка списка листовых деталей.
         
         Args:
-            parts: Список листовых деталей
+            parts: Список листовых деталей (SheetPartInfo)
         """
         self.clear()
         
-        # Сохранение данных
+        # Сохранение данных - part is SheetPartInfo directly
         for part in parts:
-            self._parts[part.part_id] = part
+            self._parts[part.id] = part
             
-        # Обновление фильтра толщин
+        # Обновление фильтра толщин - access thickness directly on SheetPartInfo
         thicknesses = sorted(set(
-            p.info.thickness for p in parts if p.info.thickness
+            p.thickness for p in parts if p.thickness
         ))
         self.cmb_thickness['values'] = ["Все"] + [f"{t} мм" for t in thicknesses]
         
@@ -168,10 +168,11 @@ class SheetTable(ttk.Frame):
         # Обновление итогов
         self._update_summary()
         
-    def _populate_table(self, parts: List['SheetPart']):
+    def _populate_table(self, parts: List['SheetPartInfo']):
         """Заполнение таблицы данными."""
         for part in parts:
-            info = part.info
+            # part is SheetPartInfo directly
+            info = part
             
             # Форматирование габаритов
             if info.unfold_width and info.unfold_height:
@@ -202,7 +203,8 @@ class SheetTable(ttk.Frame):
                 tags=(tag,)
             )
             
-            self._item_to_part[item] = part.part_id
+            # part is SheetPartInfo, use .id directly
+            self._item_to_part[item] = part.id
             
     def clear(self):
         """Очистка таблицы."""
@@ -265,7 +267,8 @@ class SheetTable(ttk.Frame):
             else:
                 # Фильтрация по толщине
                 thickness = float(filter_value.replace(' мм', ''))
-                if part.info.thickness != thickness:
+                # part is SheetPartInfo directly
+                if part.thickness != thickness:
                     # TODO: реализовать фильтрацию через пересоздание таблицы
                     pass
                     
@@ -288,7 +291,8 @@ class SheetTable(ttk.Frame):
                 filtered_parts.append(part)
             else:
                 thickness = float(filter_value.replace(' мм', ''))
-                if part.info.thickness == thickness:
+                # part is SheetPartInfo directly
+                if part.thickness == thickness:
                     filtered_parts.append(part)
                     
         # Заполнение таблицы
