@@ -32,6 +32,9 @@ def main():
     if sys.platform == 'win32':
         try:
             import win32com.client
+            import pythoncom
+            # Initialize COM on main thread - required for KOMPAS-3D automation
+            pythoncom.CoInitialize()
         except ImportError:
             messagebox.showerror(
                 "Ошибка",

@@ -330,32 +330,23 @@ class MainWindow:
             self._kompas_api = None
             
     def _connect_to_kompas(self):
-        """Подключение к КОМПАС-3D."""
+        """Подключение к КОМПАС-3D (синхронно в главном потоке для совместимости с COM)."""
         if self._is_connected:
             self._log("Уже подключено к КОМПАС-3D")
             return
             
         self._log("Подключение к КОМПАС-3D...")
         self.lbl_connection.configure(text="🟡 Подключение...", foreground='orange')
+        self.root.update()  # Обновить UI перед блокирующей операцией
         
-        # Подключение в отдельном потоке
-        def connect_thread():
-            import pythoncom
-            pythoncom.CoInitialize()
-            try:
-                from core import KompasConnection
-                self._kompas_connection = KompasConnection()
-                self._kompas_api = self._kompas_connection.connect()
-                self.root.after(0, self._on_connected)
-                    
-            except Exception as e:
-                # Bind exception into default arg so it's captured correctly
-                self.root.after(0, lambda e=e: self._on_connection_failed(str(e)))
-            finally:
-                pythoncom.CoUninitialize()
+        try:
+            from core import KompasConnection
+            self._kompas_connection = KompasConnection()
+            self._kompas_api = self._kompas_connection.connect()
+            self._on_connected()
                 
-        thread = threading.Thread(target=connect_thread, daemon=True)
-        thread.start()
+        except Exception as e:
+            self._on_connection_failed(str(e))
         
     def _on_connected(self):
         """Обработчик успешного подключения."""
