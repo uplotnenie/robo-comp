@@ -388,7 +388,7 @@ class MainWindow:
         )
         
     def _scan_assembly(self):
-        """Сканирование текущей сборки."""
+        """Сканирование текущей сборки (выполняется в главном потоке для совместимости с COM)."""
         if not self._is_connected or not self._scanner:
             messagebox.showwarning(
                 "Нет подключения",
@@ -398,42 +398,33 @@ class MainWindow:
             
         self._log("Сканирование сборки...")
         self.lbl_status.configure(text="Сканирование...")
+        self.root.update()  # Обновить UI перед блокирующей операцией
         
-        def scan_thread():
-            import pythoncom
-            pythoncom.CoInitialize()
-            try:
-                # Получение активного документа
-                if self._kompas_api is None:
-                    self.root.after(0, lambda: self._on_scan_error("API не инициализирован"))
-                    return
-                doc = self._kompas_api.active_document
-                if not doc:
-                    self.root.after(0, lambda: self._on_scan_error("Нет открытого документа"))
-                    return
-                    
-                # Сканирование
-                if self._scanner is None:
-                    self.root.after(0, lambda: self._on_scan_error("Сканер не инициализирован"))
-                    return
-                assembly_node = self._scanner.scan_document(doc)
-                if assembly_node is None:
-                    self.root.after(0, lambda: self._on_scan_error("Не удалось просканировать документ"))
-                    return
-                sheet_parts_list = assembly_node.get_all_sheet_parts()
-                sheet_parts = {sp.id: sp for sp in sheet_parts_list}
+        try:
+            # Получение активного документа
+            if self._kompas_api is None:
+                self._on_scan_error("API не инициализирован")
+                return
+            doc = self._kompas_api.active_document
+            if not doc:
+                self._on_scan_error("Нет открытого документа")
+                return
+                
+            # Сканирование
+            if self._scanner is None:
+                self._on_scan_error("Сканер не инициализирован")
+                return
+            assembly_node = self._scanner.scan_document(doc)
+            if assembly_node is None:
+                self._on_scan_error("Не удалось просканировать документ")
+                return
+            sheet_parts_list = assembly_node.get_all_sheet_parts()
+            sheet_parts = {sp.id: sp for sp in sheet_parts_list}
 
-                # Bind results into lambda defaults to avoid late-binding/free-variable issues
-                self.root.after(0, lambda a=assembly_node, s=sheet_parts: self._on_scan_complete(a, s))
-                
-            except Exception as e:
-                # Bind exception into default arg so it's captured correctly when callback runs
-                self.root.after(0, lambda e=e: self._on_scan_error(str(e)))
-            finally:
-                pythoncom.CoUninitialize()
-                
-        thread = threading.Thread(target=scan_thread, daemon=True)
-        thread.start()
+            self._on_scan_complete(assembly_node, sheet_parts)
+            
+        except Exception as e:
+            self._on_scan_error(str(e))
         
     def _on_scan_complete(self, assembly_node: 'AssemblyNode', sheet_parts: Dict[str, Any]):
         """Обработчик завершения сканирования."""
