@@ -216,6 +216,8 @@ class DXFExporter:
             start_time=datetime.now()
         )
         
+        doc = None
+        
         try:
             # Generate output path
             output_path = self._generate_output_path(part_info, index)
@@ -230,7 +232,7 @@ class DXFExporter:
             # Ensure output directory exists
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Open part document if needed
+            # Open part document (visible for proper export)
             doc = self._open_part_document(part_info)
             if doc is None:
                 result.error_message = "Не удалось открыть документ детали"
@@ -238,6 +240,9 @@ class DXFExporter:
                 return result
             
             try:
+                # Activate the document
+                doc.activate()
+                
                 # Get 3D document
                 doc_3d = doc.get_3d_document()
                 if doc_3d is None:
@@ -265,32 +270,46 @@ class DXFExporter:
                 body = bodies[0]
                 original_straightened = body.is_straightened
                 
+                logger.debug(f"Sheet metal body found, original straightened state: {original_straightened}")
+                
                 try:
                     # Unfold (straighten) the body if needed
                     if self._settings.straighten_before_export and not body.is_straightened:
+                        logger.debug("Straightening sheet metal body")
                         body.is_straightened = True
+                        # Rebuild to apply changes
+                        doc.rebuild()
                     
-                    # Export to DXF using converter
+                    # Export to DXF
                     success = self._export_to_dxf(doc, output_path)
                     
                     if success:
                         result.success = True
+                        logger.info(f"Successfully exported: {output_path}")
                     else:
                         result.error_message = "Ошибка конвертации в DXF"
                     
                 finally:
                     # Restore original state
                     if body.is_straightened != original_straightened:
+                        logger.debug("Restoring original straightened state")
                         body.is_straightened = original_straightened
                     
-            finally:
-                # Close document if we opened it
-                # Note: We might want to keep it open for performance
-                pass
+            except Exception as e:
+                logger.exception(f"Error during export of {part_info.display_name}")
+                result.error_message = str(e)
                 
         except Exception as e:
             logger.exception(f"Error exporting part {part_info.display_name}")
             result.error_message = str(e)
+            
+        finally:
+            # Close document after export
+            if doc is not None:
+                try:
+                    doc.close(save=False)
+                except Exception as e:
+                    logger.debug(f"Failed to close document: {e}")
         
         result.end_time = datetime.now()
         return result
@@ -313,45 +332,35 @@ class DXFExporter:
             logger.error(f"Part file not found: {part_info.file_path}")
             return None
         
-        # Try to open document
+        # Try to open document - VISIBLE for proper export
         return self._api.documents.open(
             path=part_info.file_path,
-            visible=False,  # Open in hidden mode for performance
-            read_only=True
+            visible=True,  # Must be visible for proper flat pattern export
+            read_only=False  # Need write access to modify straighten state
         )
     
     def _export_to_dxf(self, doc: KompasDocument, output_path: Path) -> bool:
         """
         Export document to DXF format.
         
+        For 3D documents with sheet metal bodies, creates an associative view
+        in a 2D fragment to project the flat pattern, then saves as DXF.
+        
         Args:
-            doc: Document to export
+            doc: Document to export (should be 3D with straightened sheet metal)
             output_path: Output file path
             
         Returns:
             True if successful
         """
         try:
-            # Method 1: Use SaveAs with DXF extension
-            # This works if the document is a 2D drawing/fragment
+            # Method 1: For 2D documents, use SaveAs directly
             if doc.is_2d:
+                logger.debug("Document is 2D, saving directly as DXF")
                 return doc.save_as(str(output_path))
             
-            # Method 2: Use converter for 3D documents
-            # Need to create a 2D view first or use specific export command
-            converter = self._api.get_converter(self.DXF_CONVERTER_LIBRARY)
-            if converter:
-                # Convert to DXF
-                # Parameters: inputFile, outputFile, command, showParam
-                result = converter.Convert(
-                    doc.path_name,
-                    str(output_path),
-                    0,  # Command ID for DXF export
-                    False  # Don't show dialog
-                )
-                return bool(result)
-            
-            # Method 3: Create 2D fragment and export
+            # Method 2: For 3D documents, use 2D fragment with associative view
+            logger.debug("Document is 3D, creating 2D projection for DXF export")
             return self._export_via_2d_fragment(doc, output_path)
             
         except Exception as e:
@@ -360,41 +369,150 @@ class DXFExporter:
     
     def _export_via_2d_fragment(self, doc: KompasDocument, output_path: Path) -> bool:
         """
-        Export 3D flat pattern via 2D fragment.
+        Export 3D flat pattern via 2D fragment with associative view.
         
-        Creates a 2D fragment from the flat pattern and exports to DXF.
+        Process:
+        1. Activate the 3D document
+        2. Create a new 2D fragment
+        3. Add an associative view projecting from the 3D model
+        4. Set view to "Top" projection (for flat pattern visibility)
+        5. Save fragment as DXF
+        6. Close fragment
         
         Args:
-            doc: 3D document with flat pattern
+            doc: 3D document with straightened flat pattern
+            output_path: Output file path
+            
+        Returns:
+            True if successful
+        """
+        fragment = None
+        try:
+            # Ensure 3D document is active
+            doc.activate()
+            
+            # Rebuild to ensure straightened state is applied
+            doc.rebuild()
+            
+            # Get the 3D document path for associative view
+            source_path = doc.path_name
+            if not source_path:
+                logger.error("Source document has no path")
+                return False
+            
+            logger.debug(f"Creating associative view from: {source_path}")
+            
+            # Create new 2D fragment (visible for proper projection creation)
+            fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=True)
+            if fragment is None:
+                logger.error("Failed to create 2D fragment")
+                return False
+            
+            # Activate fragment for view creation
+            fragment.activate()
+            
+            # Get 2D document interface
+            doc_2d = fragment.get_2d_document()
+            if doc_2d is None:
+                logger.error("Failed to get 2D document interface")
+                return False
+            
+            # Get views and layers manager
+            vlm = doc_2d.views_and_layers_manager
+            if vlm is None:
+                logger.error("Failed to get ViewsAndLayersManager")
+                return False
+            
+            # Get views collection
+            views_collection = vlm.views_collection
+            if views_collection is None:
+                logger.error("Failed to get ViewsCollection")
+                return False
+            
+            # Add associative view
+            assoc_view = views_collection.add_associative_view()
+            if assoc_view is None:
+                logger.warning("Failed to add associative view, trying alternative method")
+                # Alternative: Try using the ksCMCreateSheetFromModel command
+                return self._export_via_command(doc, fragment, output_path)
+            
+            # Configure associative view
+            assoc_view.set_source_file(source_path)
+            assoc_view.set_projection("Сверху")  # "Top" view in Russian
+            assoc_view.set_position(0.0, 0.0)
+            assoc_view.set_scale(1.0)
+            assoc_view.set_angle(0.0)
+            assoc_view.set_hidden_lines(False)  # Don't show hidden lines
+            
+            # Update view to generate 2D geometry
+            if not assoc_view.update():
+                logger.warning("View update may have failed")
+            
+            # Save fragment as DXF
+            success = fragment.save_as(str(output_path))
+            
+            if success:
+                logger.info(f"Successfully exported DXF: {output_path}")
+            else:
+                logger.error("Failed to save fragment as DXF")
+            
+            return success
+            
+        except Exception as e:
+            logger.exception(f"Fragment export error: {e}")
+            return False
+            
+        finally:
+            # Close fragment without saving (we already saved as DXF)
+            if fragment is not None:
+                try:
+                    fragment.close(save=False)
+                except:
+                    pass
+    
+    def _export_via_command(
+        self, 
+        doc: KompasDocument, 
+        fragment: KompasDocument, 
+        output_path: Path
+    ) -> bool:
+        """
+        Export using KOMPAS command as fallback.
+        
+        This method uses the ksCMCreateSheetFromModel command to create
+        2D geometry from the active 3D model.
+        
+        Args:
+            doc: 3D document (must be active and visible)
+            fragment: 2D fragment to receive geometry
             output_path: Output file path
             
         Returns:
             True if successful
         """
         try:
-            # Create new 2D fragment
-            fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=False)
-            if fragment is None:
+            # Activate the 3D document
+            doc.activate()
+            
+            # Check if command is available
+            if not self._api.is_command_available(KompasCommand.CREATE_SHEET_FROM_MODEL):
+                logger.warning("CreateSheetFromModel command not available")
                 return False
             
-            try:
-                # TODO: Copy geometry from flat pattern to fragment
-                # This requires using the projection/view creation API
-                # For now, we'll use a simplified approach
-                
-                # Use ExecuteKompasCommand to create sheet from model
-                # ksCMCreateSheetFromModel = 40373
-                self._api.execute_command(KompasCommand.CREATE_SHEET_FROM_MODEL, False)
-                
-                # Save as DXF
-                return fragment.save_as(str(output_path))
-                
-            finally:
-                # Close fragment without saving
-                fragment.close(save=False)
-                
+            # Activate fragment
+            fragment.activate()
+            
+            # Execute command to create sketch from model
+            result = self._api.execute_command(KompasCommand.CREATE_SHEET_FROM_MODEL, False)
+            
+            if not result:
+                logger.warning("CreateSheetFromModel command may have failed")
+            
+            # Save as DXF
+            return fragment.save_as(str(output_path))
+            
         except Exception as e:
-            logger.error(f"Fragment export error: {e}")
+            logger.error(f"Command export error: {e}")
             return False
     
     def _generate_output_path(self, part_info: SheetPartInfo, index: int) -> Path:

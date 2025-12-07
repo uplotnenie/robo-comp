@@ -402,6 +402,34 @@ class KompasDocument:
         """Check if document is a part."""
         return self.document_type == DocumentType.PART
     
+    def activate(self) -> bool:
+        """
+        Make this document active in KOMPAS.
+        
+        Returns:
+            True if activated successfully
+        """
+        try:
+            self._doc.Active = True
+            return True
+        except Exception as e:
+            logger.error(f"Failed to activate document: {e}")
+            return False
+    
+    def rebuild(self) -> bool:
+        """
+        Rebuild/update the document.
+        
+        Returns:
+            True if rebuilt successfully
+        """
+        try:
+            self._doc.RebuildDocument()
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to rebuild document: {e}")
+            return False
+    
     def close(self, save: bool = False) -> bool:
         """
         Close the document.
@@ -917,7 +945,7 @@ class KompasDocument2D:
     """
     
     def __init__(self, doc_object: Any):
-        self._doc = doc_object
+        self._doc = _ensure_dynamic_dispatch(doc_object)
     
     @property
     def raw(self) -> Any:
@@ -933,6 +961,17 @@ class KompasDocument2D:
         except Exception as e:
             logger.error(f"Failed to get ViewsAndLayersManager: {e}")
         return None
+    
+    @property
+    def drawing_container(self) -> Optional['DrawingContainer']:
+        """Get drawing container for accessing 2D geometry."""
+        try:
+            container = self._doc.DrawingContainer
+            if container:
+                return DrawingContainer(container)
+        except Exception as e:
+            logger.error(f"Failed to get DrawingContainer: {e}")
+        return None
 
 
 class ViewsAndLayersManager:
@@ -941,11 +980,22 @@ class ViewsAndLayersManager:
     """
     
     def __init__(self, manager_object: Any):
-        self._manager = manager_object
+        self._manager = _ensure_dynamic_dispatch(manager_object)
+    
+    @property
+    def views_collection(self) -> Optional['ViewsCollection']:
+        """Get views collection wrapper for adding new views."""
+        try:
+            views = self._manager.Views
+            if views:
+                return ViewsCollection(views)
+        except Exception as e:
+            logger.debug(f"Failed to get views collection: {e}")
+        return None
     
     @property
     def views(self) -> List['View2D']:
-        """Get collection of views."""
+        """Get list of views."""
         result = []
         try:
             views_collection = self._manager.Views
@@ -1074,3 +1124,178 @@ class Layer2D:
             self._layer.Printable = value
         except:
             pass
+
+
+class DrawingContainer:
+    """
+    Wrapper for IDrawingContainer interface.
+    
+    Provides access to 2D geometry collections in a fragment/drawing.
+    """
+    
+    def __init__(self, container_object: Any):
+        self._container = _ensure_dynamic_dispatch(container_object)
+    
+    @property
+    def raw(self) -> Any:
+        return self._container
+    
+    def get_line_segments(self) -> Any:
+        """Get line segments collection."""
+        try:
+            return self._container.LineSegments
+        except:
+            return None
+    
+    def get_circles(self) -> Any:
+        """Get circles collection."""
+        try:
+            return self._container.Circles
+        except:
+            return None
+    
+    def get_arcs(self) -> Any:
+        """Get arcs collection."""
+        try:
+            return self._container.Arcs
+        except:
+            return None
+
+
+class AssociativeView:
+    """
+    Wrapper for IAssociationView interface.
+    
+    Creates a 2D projection of a 3D model in a fragment/drawing.
+    This is the proper way to export sheet metal flat patterns to DXF.
+    """
+    
+    def __init__(self, view_object: Any):
+        self._view = _ensure_dynamic_dispatch(view_object)
+    
+    @property
+    def raw(self) -> Any:
+        return self._view
+    
+    def set_source_file(self, path: str):
+        """Set the source 3D model file path."""
+        try:
+            self._view.SourceFileName = path
+        except Exception as e:
+            logger.error(f"Failed to set source file: {e}")
+    
+    def set_projection(self, projection_name: str):
+        """
+        Set projection type.
+        
+        Common projections: "Сверху" (Top), "Спереди" (Front), "Справа" (Right)
+        For flat patterns, use "Сверху" (Top) view.
+        """
+        try:
+            self._view.ProjectionName = projection_name
+        except Exception as e:
+            logger.error(f"Failed to set projection: {e}")
+    
+    def set_position(self, x: float, y: float):
+        """Set view position in the document."""
+        try:
+            self._view.X = x
+            self._view.Y = y
+        except Exception as e:
+            logger.error(f"Failed to set position: {e}")
+    
+    def set_scale(self, scale: float):
+        """Set view scale."""
+        try:
+            self._view.Scale = scale
+        except Exception as e:
+            logger.error(f"Failed to set scale: {e}")
+    
+    def set_angle(self, angle: float):
+        """Set view rotation angle (radians)."""
+        try:
+            self._view.Angle = angle
+        except Exception as e:
+            logger.error(f"Failed to set angle: {e}")
+    
+    def set_hidden_lines(self, show: bool, visible: bool = False):
+        """Configure hidden lines display."""
+        try:
+            self._view.HiddenLines = show
+            if show:
+                self._view.HiddenLinesVisible = visible
+        except Exception as e:
+            logger.error(f"Failed to set hidden lines: {e}")
+    
+    def update(self) -> bool:
+        """Update the view to regenerate geometry."""
+        try:
+            self._view.Update()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update view: {e}")
+            return False
+
+
+class ViewsCollection:
+    """
+    Wrapper for IViewsCollection interface.
+    
+    Provides access to views in a 2D document and ability to add new views.
+    """
+    
+    def __init__(self, views_object: Any):
+        self._views = _ensure_dynamic_dispatch(views_object)
+    
+    @property
+    def raw(self) -> Any:
+        return self._views
+    
+    @property
+    def count(self) -> int:
+        """Get number of views."""
+        try:
+            return self._views.Count
+        except:
+            return 0
+    
+    def add_associative_view(self) -> Optional[AssociativeView]:
+        """
+        Add a new associative view.
+        
+        Returns:
+            AssociativeView or None if failed
+        """
+        try:
+            # Try different methods to add associative view
+            view = None
+            
+            # Method 1: AddAssociationView()
+            try:
+                view = self._views.AddAssociationView()
+            except:
+                pass
+            
+            # Method 2: Add() with view type parameter
+            if view is None:
+                try:
+                    view = self._views.Add()
+                except:
+                    pass
+            
+            if view:
+                return AssociativeView(view)
+        except Exception as e:
+            logger.error(f"Failed to add associative view: {e}")
+        return None
+    
+    def get_system_view(self) -> Optional['View2D']:
+        """Get the system view (always exists in 2D documents)."""
+        try:
+            view = self._views.SystemView
+            if view:
+                return View2D(view)
+        except Exception as e:
+            logger.debug(f"Failed to get system view: {e}")
+        return None
+
