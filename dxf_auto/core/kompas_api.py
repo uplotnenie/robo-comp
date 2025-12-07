@@ -487,10 +487,18 @@ class Part3D:
     - Part properties (name, marking, material, etc.)
     - Child parts collection
     - Sheet metal bodies
+    
+    Note: Uses dynamic dispatch to access all IPart7 properties reliably.
     """
     
     def __init__(self, part_object: Any):
-        self._part = part_object
+        # Use dynamic dispatch to access IPart7 properties reliably
+        # This is necessary because the COM object might be early-bound
+        # to a different interface that doesn't expose all properties.
+        if HAS_WIN32:
+            self._part = win32com.client.Dispatch(part_object)
+        else:
+            self._part = part_object
         self._sheet_metal_container = None
     
     @property
@@ -606,16 +614,24 @@ class Part3D:
             return self._sheet_metal_container
         
         try:
-            # Query ISheetMetalContainer interface
-            container = self._part.QueryInterface(
-                win32com.client.pythoncom.IID_IDispatch
-            )
-            # Try to access SheetMetalBodies property
-            if hasattr(self._part, 'SheetMetalBodies') or self._has_sheet_metal():
-                self._sheet_metal_container = SheetMetalContainer(self._part)
-                return self._sheet_metal_container
-        except:
-            pass
+            # Try to access SheetMetalBodies property directly
+            # This is the most reliable way to detect sheet metal parts
+            bodies = self._part.SheetMetalBodies
+            if bodies is not None:
+                try:
+                    count = bodies.Count
+                    if count > 0:
+                        logger.debug(f"Found {count} sheet metal bodies in part")
+                        self._sheet_metal_container = SheetMetalContainer(self._part)
+                        return self._sheet_metal_container
+                except Exception as e:
+                    logger.debug(f"Error getting sheet metal bodies count: {e}")
+        except AttributeError:
+            # SheetMetalBodies property doesn't exist - not a sheet metal part
+            logger.debug("Part doesn't have SheetMetalBodies property")
+        except Exception as e:
+            logger.debug(f"Error checking sheet metal: {e}")
+        
         return None
     
     def _has_sheet_metal(self) -> bool:
@@ -651,10 +667,16 @@ class SheetMetalContainer:
     Wrapper for ISheetMetalContainer interface.
     
     Provides access to sheet metal operations and bodies.
+    
+    Note: Uses dynamic dispatch for reliable COM property access.
     """
     
     def __init__(self, part_object: Any):
-        self._part = part_object
+        # Use dynamic dispatch for reliable COM access
+        if HAS_WIN32:
+            self._part = win32com.client.Dispatch(part_object)
+        else:
+            self._part = part_object
     
     @property
     def sheet_metal_bodies(self) -> List['SheetMetalBody']:
@@ -664,12 +686,26 @@ class SheetMetalContainer:
             bodies = self._part.SheetMetalBodies
             if bodies:
                 count = bodies.Count
+                logger.debug(f"SheetMetalBodies count: {count}")
                 for i in range(count):
                     try:
-                        body = bodies.SheetMetalBody(i)
+                        # Try different indexing methods - KOMPAS may use Item() or SheetMetalBody()
+                        body = None
+                        try:
+                            body = bodies.SheetMetalBody(i)
+                        except:
+                            try:
+                                body = bodies.Item(i)
+                            except:
+                                try:
+                                    # Some collections use 1-based indexing
+                                    body = bodies.Item(i + 1)
+                                except:
+                                    pass
                         if body:
                             result.append(SheetMetalBody(body))
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Error getting body at index {i}: {e}")
                         continue
         except Exception as e:
             logger.debug(f"Failed to get sheet metal bodies: {e}")
@@ -690,10 +726,16 @@ class SheetMetalBody:
     Wrapper for ISheetMetalBody interface.
     
     Represents a sheet metal body with properties like thickness.
+    
+    Note: Uses dynamic dispatch for reliable COM property access.
     """
     
     def __init__(self, body_object: Any):
-        self._body = body_object
+        # Use dynamic dispatch for reliable COM access
+        if HAS_WIN32:
+            self._body = win32com.client.Dispatch(body_object)
+        else:
+            self._body = body_object
     
     @property
     def raw(self) -> Any:

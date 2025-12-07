@@ -6,10 +6,21 @@ Main entry point for the application.
 
 import sys
 import os
+import logging
 
 
 def main():
     """Main application entry point."""
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    
     # Ensure we're running on Windows (required for COM)
     if sys.platform != 'win32':
         print("Предупреждение: Это приложение требует Windows и установленный КОМПАС-3D.")
