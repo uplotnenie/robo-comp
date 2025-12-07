@@ -441,10 +441,21 @@ class KompasDocument3D:
     Wrapper for IKompasDocument3D interface.
     
     Provides access to 3D model structure, parts, and sheet metal bodies.
+    
+    Note: Uses dynamic dispatch to access TopPart and other IKompasDocument3D
+    properties, since the base IKompasDocument interface doesn't expose them.
     """
     
     def __init__(self, doc_object: Any):
-        self._doc = doc_object
+        # Use dynamic dispatch to access IKompasDocument3D properties
+        # This is necessary because ActiveDocument returns IKompasDocument,
+        # but TopPart is only available on IKompasDocument3D interface.
+        # Dynamic dispatch via win32com.client allows COM to resolve
+        # the correct interface at runtime.
+        if HAS_WIN32:
+            self._doc = win32com.client.Dispatch(doc_object)
+        else:
+            self._doc = doc_object
     
     @property
     def raw(self) -> Any:
