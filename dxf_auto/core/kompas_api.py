@@ -501,6 +501,36 @@ class Part3D:
             self._part = part_object
         self._sheet_metal_container = None
     
+    def _debug_com_info(self) -> None:
+        """Debug method to log COM object information."""
+        try:
+            # Log basic type info
+            logger.debug(f"COM object type: {type(self._part)}")
+            
+            # Try to get TypeInfo
+            try:
+                import pythoncom
+                disp = self._part._oleobj_
+                type_info = disp.GetTypeInfo(0, pythoncom.LOCALE_USER_DEFAULT)
+                logger.debug(f"TypeInfo: {type_info}")
+            except:
+                pass
+            
+            # List some expected properties/methods
+            expected = ['Name', 'Marking', 'FileName', 'Detail', 'Parts', 
+                       'SheetMetalBodies', 'SubFeatures', 'Bodies']
+            for prop in expected:
+                try:
+                    val = getattr(self._part, prop, '<NOT FOUND>')
+                    if val != '<NOT FOUND>':
+                        logger.debug(f"  {prop}: exists (type={type(val).__name__})")
+                    else:
+                        logger.debug(f"  {prop}: NOT FOUND")
+                except Exception as e:
+                    logger.debug(f"  {prop}: ERROR ({type(e).__name__}: {e})")
+        except Exception as e:
+            logger.debug(f"_debug_com_info error: {e}")
+    
     @property
     def raw(self) -> Any:
         return self._part
@@ -616,7 +646,9 @@ class Part3D:
         """
         Get sheet metal container for accessing sheet metal bodies.
         
-        Uses ISheetMetalContainer interface which is inherited by IPart7.
+        Uses multiple detection methods:
+        1. SheetMetalBodies property (ISheetMetalContainer interface)
+        2. SubFeatures(74) for o3d_sheetMetalBody type
         
         Returns:
             SheetMetalContainer or None if not a sheet metal part
@@ -624,47 +656,83 @@ class Part3D:
         if self._sheet_metal_container is not None:
             return self._sheet_metal_container
         
+        part_id = self.name or self.marking or self.file_name
+        logger.debug(f"Checking sheet metal for part: {part_id}")
+        
+        # Constant for sheet metal body type from ksObj3dTypeEnum
+        O3D_SHEET_METAL_BODY = 74
+        
         try:
-            # Log all available properties for debugging
-            logger.debug(f"Checking SheetMetalBodies for part: {self.name or self.marking or self.file_name}")
-            
-            # Try to access SheetMetalBodies property directly
+            # Method 1: Direct SheetMetalBodies property access
             # IPart7 inherits from ISheetMetalContainer which has this property
-            bodies = None
-            
-            # Method 1: Direct property access
             try:
                 bodies = self._part.SheetMetalBodies
-                logger.debug(f"  SheetMetalBodies via direct access: {bodies is not None}")
-            except AttributeError as e:
-                logger.debug(f"  SheetMetalBodies via direct access failed: {e}")
+                if bodies is not None:
+                    try:
+                        count = bodies.Count
+                        logger.debug(f"  Method 1 - SheetMetalBodies.Count = {count}")
+                        if count > 0:
+                            logger.info(f"Found {count} sheet metal bodies via SheetMetalBodies property")
+                            self._sheet_metal_container = SheetMetalContainer(self._part)
+                            return self._sheet_metal_container
+                    except Exception as e:
+                        logger.debug(f"  Method 1 - Error getting Count: {type(e).__name__}: {e}")
+                else:
+                    logger.debug(f"  Method 1 - SheetMetalBodies is None")
+            except AttributeError:
+                logger.debug(f"  Method 1 - SheetMetalBodies property not found")
             except Exception as e:
-                logger.debug(f"  SheetMetalBodies error: {type(e).__name__}: {e}")
+                logger.debug(f"  Method 1 - Error: {type(e).__name__}: {e}")
             
-            # Method 2: Try GetSheetMetalBodies method (automation alternative syntax)
-            if bodies is None:
-                try:
-                    bodies = self._part.GetSheetMetalBodies()
-                    logger.debug(f"  SheetMetalBodies via GetSheetMetalBodies(): {bodies is not None}")
-                except AttributeError:
-                    pass
-                except Exception as e:
-                    logger.debug(f"  GetSheetMetalBodies() error: {type(e).__name__}: {e}")
-            
-            if bodies is not None:
-                try:
-                    count = bodies.Count
-                    logger.debug(f"  SheetMetalBodies.Count = {count}")
+            # Method 2: Try SubFeatures to find sheet metal body features
+            # SubFeatures(treeType, through, libObject) from IFeature7
+            try:
+                # Get sheet metal body features (type 74)
+                sub_features = self._part.SubFeatures(O3D_SHEET_METAL_BODY, True, False)
+                if sub_features is not None:
+                    # SubFeatures returns SAFEARRAY or single dispatch
+                    if hasattr(sub_features, '__len__'):
+                        count = len(sub_features)
+                    elif hasattr(sub_features, 'Count'):
+                        count = sub_features.Count
+                    else:
+                        # Single object returned
+                        count = 1
+                    
+                    logger.debug(f"  Method 2 - SubFeatures(74) count = {count}")
                     if count > 0:
-                        logger.info(f"Found {count} sheet metal bodies in part: {self.name or self.marking}")
+                        logger.info(f"Found {count} sheet metal bodies via SubFeatures(74)")
                         self._sheet_metal_container = SheetMetalContainer(self._part)
                         return self._sheet_metal_container
+                else:
+                    logger.debug(f"  Method 2 - SubFeatures(74) is None")
+            except AttributeError:
+                logger.debug(f"  Method 2 - SubFeatures not available")
+            except Exception as e:
+                logger.debug(f"  Method 2 - Error: {type(e).__name__}: {e}")
+            
+            # Method 3: Try GetSubFeatures method (alternative automation syntax)
+            try:
+                sub_features = self._part.GetSubFeatures(O3D_SHEET_METAL_BODY, True, False)
+                if sub_features is not None:
+                    if hasattr(sub_features, '__len__'):
+                        count = len(sub_features)
+                    elif hasattr(sub_features, 'Count'):
+                        count = sub_features.Count
                     else:
-                        logger.debug(f"  SheetMetalBodies collection is empty")
-                except Exception as e:
-                    logger.debug(f"  Error getting Count: {type(e).__name__}: {e}")
-            else:
-                logger.debug(f"  SheetMetalBodies property is None - not a sheet metal part")
+                        count = 1
+                    
+                    logger.debug(f"  Method 3 - GetSubFeatures(74) count = {count}")
+                    if count > 0:
+                        logger.info(f"Found {count} sheet metal bodies via GetSubFeatures(74)")
+                        self._sheet_metal_container = SheetMetalContainer(self._part)
+                        return self._sheet_metal_container
+            except AttributeError:
+                pass
+            except Exception as e:
+                logger.debug(f"  Method 3 - Error: {type(e).__name__}: {e}")
+            
+            logger.debug(f"  No sheet metal bodies found in part: {part_id}")
                 
         except Exception as e:
             logger.debug(f"Error in get_sheet_metal_container: {type(e).__name__}: {e}")
