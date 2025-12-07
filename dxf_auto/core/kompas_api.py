@@ -15,6 +15,7 @@ import logging
 # Windows COM imports
 try:
     import win32com.client
+    import win32com.client.dynamic  # For late-binding
     from win32com.client import Dispatch, GetActiveObject
     import pythoncom
     HAS_WIN32 = True
@@ -41,6 +42,39 @@ class KompasCommand(IntEnum):
     """KOMPAS command IDs (ksKompasCommandEnum)."""
     REBUILD_3D = 40356           # ksCM3DRebuild
     CREATE_SHEET_FROM_MODEL = 40373  # ksCMCreateSheetFromModel
+
+
+def _ensure_dynamic_dispatch(com_object: Any) -> Any:
+    """
+    Ensure COM object is wrapped in dynamic (late-bound) dispatch.
+    
+    This is critical for KOMPAS-3D API because:
+    - Early-bound objects (from gen_py cache) only expose properties from the exact interface
+    - Late-bound objects use IDispatch and can access ALL properties, including inherited interfaces
+    - IPart7 inherits from ISheetMetalContainer but early-bound IPart7 doesn't expose SheetMetalBodies
+    
+    Args:
+        com_object: COM object (may be early-bound or late-bound)
+        
+    Returns:
+        Dynamic dispatch wrapper for the object
+    """
+    if not HAS_WIN32 or com_object is None:
+        return com_object
+    
+    try:
+        # If object has _oleobj_, it's a wrapped COM object - get the raw IDispatch
+        if hasattr(com_object, '_oleobj_'):
+            raw_dispatch = com_object._oleobj_
+        else:
+            raw_dispatch = com_object
+        
+        # Create a fresh dynamic (late-bound) wrapper
+        # This bypasses gen_py cache and uses pure IDispatch access
+        return win32com.client.dynamic.Dispatch(raw_dispatch)
+    except Exception as e:
+        logger.debug(f"Failed to create dynamic dispatch: {e}, using original object")
+        return com_object
 
 
 # Type stubs for KOMPAS interfaces
@@ -447,15 +481,11 @@ class KompasDocument3D:
     """
     
     def __init__(self, doc_object: Any):
-        # Use dynamic dispatch to access IKompasDocument3D properties
+        # Use dynamic dispatch (late-binding) to access IKompasDocument3D properties
         # This is necessary because ActiveDocument returns IKompasDocument,
         # but TopPart is only available on IKompasDocument3D interface.
-        # Dynamic dispatch via win32com.client allows COM to resolve
-        # the correct interface at runtime.
-        if HAS_WIN32:
-            self._doc = win32com.client.Dispatch(doc_object)
-        else:
-            self._doc = doc_object
+        # Dynamic dispatch allows access to ALL properties via IDispatch.
+        self._doc = _ensure_dynamic_dispatch(doc_object)
     
     @property
     def raw(self) -> Any:
@@ -492,13 +522,11 @@ class Part3D:
     """
     
     def __init__(self, part_object: Any):
-        # Use dynamic dispatch to access IPart7 properties reliably
-        # This is necessary because the COM object might be early-bound
-        # to a different interface that doesn't expose all properties.
-        if HAS_WIN32:
-            self._part = win32com.client.Dispatch(part_object)
-        else:
-            self._part = part_object
+        # Use dynamic dispatch (late-binding) to access IPart7 and inherited interfaces
+        # This is CRITICAL because early-bound IPart7 doesn't expose SheetMetalBodies
+        # which is defined on ISheetMetalContainer (an interface IPart7 inherits from).
+        # Dynamic dispatch allows access to ALL properties via IDispatch.
+        self._part = _ensure_dynamic_dispatch(part_object)
         self._sheet_metal_container = None
     
     def _debug_com_info(self) -> None:
@@ -777,11 +805,8 @@ class SheetMetalContainer:
     """
     
     def __init__(self, part_object: Any):
-        # Use dynamic dispatch for reliable COM access
-        if HAS_WIN32:
-            self._part = win32com.client.Dispatch(part_object)
-        else:
-            self._part = part_object
+        # Use dynamic dispatch for reliable COM access to all interfaces
+        self._part = _ensure_dynamic_dispatch(part_object)
     
     @property
     def sheet_metal_bodies(self) -> List['SheetMetalBody']:
@@ -836,11 +861,8 @@ class SheetMetalBody:
     """
     
     def __init__(self, body_object: Any):
-        # Use dynamic dispatch for reliable COM access
-        if HAS_WIN32:
-            self._body = win32com.client.Dispatch(body_object)
-        else:
-            self._body = body_object
+        # Use dynamic dispatch for reliable COM access to all interfaces
+        self._body = _ensure_dynamic_dispatch(body_object)
     
     @property
     def raw(self) -> Any:
