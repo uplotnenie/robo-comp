@@ -1,0 +1,14 @@
+# DXF-Auto Requirements
+# Python Tkinter application for KOMPAS-3D DXF export
+
+# COM automation for Windows (KOMPAS-3D interaction)
+pywin32>=306
+
+# Image processing for thumbnails
+Pillow>=10.0.0
+
+# JSON configuration handling (built-in, but listed for clarity)
+# json - built-in
+
+# Optional: for better treeview icons
+# ttkthemes>=3.2.2
