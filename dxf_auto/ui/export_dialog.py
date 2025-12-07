@@ -15,12 +15,22 @@ from pathlib import Path
 import threading
 import queue
 import time
+import logging
 from dataclasses import dataclass
+
+# COM support for background thread
+try:
+    import pythoncom
+    HAS_PYTHONCOM = True
+except ImportError:
+    HAS_PYTHONCOM = False
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from models import SheetPart, ExportSettings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -298,8 +308,58 @@ class ExportDialog(tk.Toplevel):
         thread.start()
         
     def _export_thread(self):
-        """Поток экспорта."""
+        """
+        Поток экспорта.
+        
+        ВАЖНО: COM объекты не могут передаваться между потоками напрямую.
+        Поэтому мы инициализируем COM и создаём новое подключение к KOMPAS
+        в этом потоке.
+        """
+        # Инициализация COM для этого потока
+        com_initialized = False
+        if HAS_PYTHONCOM:
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+                logger.debug("COM initialized in export thread")
+            except Exception as e:
+                logger.warning(f"Failed to initialize COM: {e}")
+        
+        try:
+            self._do_export()
+        finally:
+            # Освобождение COM
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                    logger.debug("COM uninitialized in export thread")
+                except Exception as e:
+                    logger.warning(f"Failed to uninitialize COM: {e}")
+    
+    def _do_export(self):
+        """Выполнение экспорта с новым подключением к KOMPAS."""
         self._log("Начало экспорта...")
+        
+        # Создаём новое подключение к KOMPAS в этом потоке
+        kompas_api = None
+        exporter = None
+        
+        try:
+            from core.kompas_api import KompasConnection
+            from core.dxf_exporter import DXFExporter
+            
+            connection = KompasConnection(visible=True, new_instance=False)
+            kompas_api = connection.connect()
+            self._log("Подключено к KOMPAS-3D", 'info')
+            
+            # Создаём экспортёр с новым подключением
+            exporter = DXFExporter(kompas_api, self.settings)
+            
+        except Exception as e:
+            self._log(f"Ошибка подключения к KOMPAS: {e}", 'error')
+            logger.exception("Failed to connect to KOMPAS in export thread")
+            self.message_queue.put(('finished',))
+            return
         
         success_count = 0
         error_count = 0
@@ -316,25 +376,29 @@ class ExportDialog(tk.Toplevel):
             start_time = time.time()
             
             try:
-                # Вызов функции экспорта
-                if self.export_function:
-                    output_path = self.export_function(part, self.settings)
-                else:
-                    # Демо-режим без реального экспорта
-                    output_path = str(Path(self.settings.output_dir or ".") / f"{part_name}.dxf")
-                    time.sleep(0.5)  # Имитация работы
-                    
-                export_time = time.time() - start_time
+                # Экспорт через DXFExporter
+                from models import SheetPartInfo
+                part_info = part if isinstance(part, SheetPartInfo) else part
+                part_info.export_selected = True
                 
-                result = ExportResult(
-                    part_id=part.id,
-                    part_name=part_name,
-                    output_path=output_path,
-                    success=True,
-                    export_time=export_time
-                )
-                success_count += 1
-                self._log(f"  ✓ Сохранено: {Path(output_path).name}", 'success')
+                summary = exporter.export_parts([part_info])
+                
+                if summary.results and summary.results[0].success:
+                    output_path = summary.results[0].output_path
+                    export_time = time.time() - start_time
+                    
+                    result = ExportResult(
+                        part_id=part.id,
+                        part_name=part_name,
+                        output_path=output_path,
+                        success=True,
+                        export_time=export_time
+                    )
+                    success_count += 1
+                    self._log(f"  ✓ Сохранено: {Path(output_path).name}", 'success')
+                else:
+                    error_msg = summary.results[0].error_message if summary.results else "Неизвестная ошибка"
+                    raise RuntimeError(error_msg)
                 
             except Exception as e:
                 export_time = time.time() - start_time

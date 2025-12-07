@@ -469,11 +469,12 @@ class MainWindow:
         
     def _show_export_dialog(self, parts: List['SheetPart']):
         """Показ диалога экспорта."""
+        # ExportDialog создаёт собственное подключение к KOMPAS в фоновом потоке
+        # для корректной работы с COM
         dialog = ExportDialog(
             self.root,
             parts,
-            self._settings,
-            export_function=self._do_export_part
+            self._settings
         )
         self.root.wait_window(dialog)
         
