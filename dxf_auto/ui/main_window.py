@@ -21,8 +21,8 @@ from .export_dialog import ExportDialog
 # Условные импорты для type checking
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from ..core import KompasAPI, AssemblyScanner, DXFExporter
-    from ..models import SheetPart, AssemblyNode, ExportSettings
+    from core import KompasAPI, AssemblyScanner, DXFExporter
+    from models import SheetPart, AssemblyNode, ExportSettings
 
 
 class MainWindow:
@@ -70,7 +70,7 @@ class MainWindow:
         
     def _init_default_settings(self):
         """Инициализация настроек по умолчанию."""
-        from ..models import ExportSettings
+        from models import ExportSettings
         
         self._settings = ExportSettings()
         self._settings.output_directory = str(Path.home() / "Documents" / "DXF_Export")
@@ -319,7 +319,7 @@ class MainWindow:
         self._log("Проверка подключения к КОМПАС-3D...")
         
         try:
-            from ..core import KompasConnection
+            from core import KompasConnection
             self._kompas_connection = KompasConnection()
             self._kompas_api = self._kompas_connection.connect()
             self._on_connected()
@@ -341,7 +341,7 @@ class MainWindow:
         # Подключение в отдельном потоке
         def connect_thread():
             try:
-                from ..core import KompasConnection
+                from core import KompasConnection
                 self._kompas_connection = KompasConnection()
                 self._kompas_api = self._kompas_connection.connect()
                 self.root.after(0, self._on_connected)
@@ -364,7 +364,7 @@ class MainWindow:
         
         # Инициализация сканера и экспортёра
         if self._kompas_api is not None:
-            from ..core import AssemblyScanner, DXFExporter
+            from core import AssemblyScanner, DXFExporter
             self._scanner = AssemblyScanner(self._kompas_api)
             if self._settings is not None:
                 self._exporter = DXFExporter(self._kompas_api, self._settings)
@@ -505,7 +505,7 @@ class MainWindow:
         """
         if self._exporter:
             # Use export_parts with single item list
-            from ..models import SheetPartInfo
+            from models import SheetPartInfo
             part_info = part if isinstance(part, SheetPartInfo) else part.info
             part_info.export_selected = True
             summary = self._exporter.export_parts([part_info])

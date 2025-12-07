@@ -19,7 +19,7 @@ from .kompas_api import (
     SheetMetalContainer,
     SheetMetalBody,
 )
-from ..models.sheet_part import SheetPartInfo, AssemblyNode
+from models.sheet_part import SheetPartInfo, AssemblyNode
 
 logger = logging.getLogger(__name__)
 

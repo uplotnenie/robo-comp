@@ -12,7 +12,7 @@ from tkinter import ttk, filedialog, messagebox
 from typing import Optional, Callable, Dict, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models import ExportSettings, LineTypeSettings
+    from models import ExportSettings, LineTypeSettings
 
 
 class SettingsDialog(tk.Toplevel):
@@ -35,7 +35,7 @@ class SettingsDialog(tk.Toplevel):
         super().__init__(parent)
         
         # Import and create default settings if None
-        from ..models import ExportSettings as ES
+        from models import ExportSettings as ES
         self.settings = settings if settings is not None else ES()
         self.on_save = on_save
         self.result = None

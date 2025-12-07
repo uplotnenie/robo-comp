@@ -15,7 +15,7 @@ from tkinter import ttk
 from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models import SheetPart, SheetPartInfo
+    from models import SheetPart, SheetPartInfo
 
 
 class SheetTable(ttk.Frame):

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..models import SheetPart, ExportSettings
+    from models import SheetPart, ExportSettings
 
 
 @dataclass
@@ -57,7 +57,7 @@ class ExportDialog(tk.Toplevel):
         
         self.parts = parts
         # Import and create default settings if None
-        from ..models import ExportSettings as ES
+        from models import ExportSettings as ES
         self.settings = settings if settings is not None else ES()
         self.export_function = export_function
         

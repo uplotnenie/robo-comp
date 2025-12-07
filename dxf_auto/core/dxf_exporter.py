@@ -19,8 +19,8 @@ from .kompas_api import (
     KompasCommand,
     Part3D,
 )
-from ..models.sheet_part import SheetPartInfo, SheetPart
-from ..models.export_settings import ExportSettings, LineTypeSettings
+from models.sheet_part import SheetPartInfo, SheetPart
+from models.export_settings import ExportSettings, LineTypeSettings
 
 logger = logging.getLogger(__name__)
 
