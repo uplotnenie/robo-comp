@@ -932,19 +932,107 @@ class SheetMetalBody:
     
     @property
     def is_straightened(self) -> bool:
-        """Check if body is in straightened (unfolded) state."""
+        """
+        Check if body is in straightened (unfolded) state.
+        
+        Returns:
+            True if body is unfolded/straightened
+        """
         try:
-            return bool(self._body.Straighten)
-        except:
+            # Try IsStraightened first (documented property name)
+            result = bool(self._body.IsStraightened)
+            logger.debug(f"SheetMetalBody.IsStraightened = {result}")
+            return result
+        except AttributeError:
+            # Fallback to Straighten property
+            try:
+                result = bool(self._body.Straighten)
+                logger.debug(f"SheetMetalBody.Straighten = {result}")
+                return result
+            except Exception as e:
+                logger.debug(f"Failed to get straighten state: {e}")
+                return False
+        except Exception as e:
+            logger.debug(f"Failed to get IsStraightened state: {e}")
             return False
     
     @is_straightened.setter
     def is_straightened(self, value: bool):
-        """Set straightened (unfolded) state."""
+        """
+        Set straightened (unfolded) state.
+        
+        Args:
+            value: True to unfold (straighten), False to fold
+        """
+        success = False
+        
+        # Try IsStraightened first (documented property name)
         try:
-            self._body.Straighten = value
+            self._body.IsStraightened = value
+            logger.info(f"Set SheetMetalBody.IsStraightened = {value}")
+            success = True
+        except AttributeError:
+            logger.debug("IsStraightened property not available, trying Straighten")
         except Exception as e:
-            logger.error(f"Failed to set straighten state: {e}")
+            logger.warning(f"Failed to set IsStraightened: {e}")
+        
+        # Fallback to Straighten property
+        if not success:
+            try:
+                self._body.Straighten = value
+                logger.info(f"Set SheetMetalBody.Straighten = {value}")
+                success = True
+            except Exception as e:
+                logger.error(f"Failed to set Straighten: {e}")
+        
+        if not success:
+            logger.error(f"Could not set straighten state to {value} - all methods failed")
+    
+    def straighten(self) -> bool:
+        """
+        Unfold (straighten) the sheet metal body.
+        
+        Returns:
+            True if successfully straightened
+        """
+        original = self.is_straightened
+        if original:
+            logger.debug("Body is already straightened")
+            return True
+        
+        self.is_straightened = True
+        
+        # Verify the change
+        new_state = self.is_straightened
+        if new_state:
+            logger.info("Successfully straightened sheet metal body")
+            return True
+        else:
+            logger.error("Failed to straighten sheet metal body - state did not change")
+            return False
+    
+    def fold(self) -> bool:
+        """
+        Fold (unstraighten) the sheet metal body back to original state.
+        
+        Returns:
+            True if successfully folded
+        """
+        original = self.is_straightened
+        if not original:
+            logger.debug("Body is already folded")
+            return True
+        
+        self.is_straightened = False
+        
+        # Verify the change
+        new_state = self.is_straightened
+        if not new_state:
+            logger.info("Successfully folded sheet metal body")
+            return True
+        else:
+            logger.error("Failed to fold sheet metal body - state did not change")
+            return False
 
 
 class KompasDocument2D:
