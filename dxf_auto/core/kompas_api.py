@@ -272,8 +272,10 @@ class KompasAPI:
             True if successful
         """
         try:
-            self._app.StopCurrentProcess(cancel)
-            logger.debug(f"StopCurrentProcess called with cancel={cancel}")
+            # IMPORTANT: Must pass integer (0 or 1) for COM BOOL, not Python bool
+            cancel_int = 1 if cancel else 0
+            self._app.StopCurrentProcess(cancel_int)
+            logger.debug(f"StopCurrentProcess called with cancel={cancel_int}")
             return True
         except Exception as e:
             logger.debug(f"StopCurrentProcess failed: {e}")

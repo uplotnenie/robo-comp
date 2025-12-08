@@ -397,17 +397,19 @@ class DXFExporter:
         Export 3D flat pattern via 2D fragment using interactive command.
         
         This method uses the KOMPAS command ksCMCreateSheetFromModel (40373)
-        which creates a 2D view from a 3D model. Since this is an interactive
-        command that normally requires user to click to place the view, we use
-        a threaded approach to auto-complete it.
+        which creates a 2D view from a 3D model. The command works as follows:
+        - It operates on the currently ACTIVE 3D document
+        - It creates geometry in an existing 2D document (fragment)
+        - The fragment should be created BEFORE executing the command
+        - The 3D document must be ACTIVE when command is executed
         
         The approach:
         1. Activate the 3D document with straightened flat pattern
-        2. Create a new 2D fragment document
-        3. Start a timer to auto-complete the command after a short delay
+        2. Create a new 2D fragment document (visible, becomes active)
+        3. Re-activate the 3D document
         4. Execute command 40373 (CreateSheetFromModel)
-        5. The timer fires and completes the command (places view at default position)
-        6. Save the fragment as DXF
+        5. Auto-complete with StopCurrentProcess or Enter key
+        6. Activate fragment and save as DXF
         
         Args:
             doc: 3D document with straightened flat pattern (already straightened)
@@ -425,29 +427,47 @@ class DXFExporter:
             source_path = doc.path_name
             logger.debug(f"Exporting flat pattern from: {source_path}")
             
-            # Step 1: Ensure 3D document is active (source for the view)
+            # Log document state for debugging
+            active_doc = self._api.active_document
+            if active_doc:
+                logger.debug(f"Currently active document: {active_doc.name}, type: {active_doc.document_type}")
+            else:
+                logger.debug("No active document")
+            
+            doc_count = self._api.documents.count
+            logger.debug(f"Total open documents: {doc_count}")
+            
+            # Step 1: Ensure 3D document is active first
             doc.activate()
-            logger.debug("Activated 3D document")
+            logger.debug(f"Activated 3D document: {doc.name}")
+            time.sleep(0.3)
             
-            # Allow KOMPAS to fully activate the document
-            time.sleep(0.2)
-            
-            # Step 2: Create new 2D fragment document (target)
-            # Creating as INVISIBLE is important - it prevents the fragment from
-            # becoming the active document and keeps the 3D model active
+            # Step 2: Create new 2D fragment document (INVISIBLE for command target)
+            # Try creating as invisible - according to reference docs
             fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=False)
             if fragment is None:
                 logger.error("Failed to create 2D fragment document")
                 return False
-            logger.debug("Created 2D fragment for flat pattern view (invisible)")
+            logger.debug(f"Created 2D fragment for flat pattern view: {fragment.name}")
             
-            # Ensure 3D document is still active - the command works FROM the 3D model
-            # The command 40373 creates a view from the active 3D document
-            doc.activate()
+            # Step 3: CRITICAL - Keep fragment as target but 3D doc must be active
+            # Command 40373 (CreateSheetFromModel) reads geometry from active 3D doc
+            # and inserts into the target 2D document
+            # The 3D document with the flat pattern must be the ACTIVE document
             time.sleep(0.2)
-            logger.debug("Ensured 3D document is active for command execution")
+            doc.activate()  # 3D document must be active - it's the SOURCE
+            time.sleep(0.3)
+            logger.debug("Ensured 3D document is active (source for flat pattern)")
             
-            # Step 3: Set up auto-completion via threading
+            # Check if command is available before trying to execute
+            if self._api.is_command_available(CREATE_SHEET_FROM_MODEL):
+                logger.debug("Command 40373 is available")
+            else:
+                logger.warning("Command 40373 is NOT available - trying alternative approach")
+                # Try without threading - maybe the command works differently
+                # when not in an interactive context
+            
+            # Step 4: Set up auto-completion via threading
             # The command 40373 is interactive - it waits for user to place the view
             # We use a timer to call StopCurrentProcess() which completes the command
             
@@ -498,10 +518,19 @@ class DXFExporter:
             timer_thread = threading.Thread(target=auto_complete_command, daemon=True)
             timer_thread.start()
             
-            # Step 4: Execute the interactive command
-            logger.debug("Executing CreateSheetFromModel command (40373)...")
-            cmd_result = self._api.execute_command(CREATE_SHEET_FROM_MODEL, post=False)
+            # Step 5: Execute the interactive command
+            # Try post=True first - this uses PostMessage which returns immediately
+            # and allows the command to run asynchronously
+            logger.debug("Executing CreateSheetFromModel command (40373) with post=True...")
+            cmd_result = self._api.execute_command(CREATE_SHEET_FROM_MODEL, post=True)
             logger.debug(f"Command execution returned: {cmd_result}")
+            
+            # If post=True didn't work, try post=False (synchronous)
+            if not cmd_result:
+                logger.debug("Retrying with post=False (synchronous mode)...")
+                time.sleep(0.2)
+                cmd_result = self._api.execute_command(CREATE_SHEET_FROM_MODEL, post=False)
+                logger.debug(f"Synchronous command returned: {cmd_result}")
             
             # Wait for auto-complete to finish (with timeout)
             command_completed.wait(timeout=5.0)
