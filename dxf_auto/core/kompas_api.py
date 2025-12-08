@@ -256,6 +256,29 @@ class KompasAPI:
             logger.error(f"Failed to execute command {command_id}: {e}")
             return False
     
+    def stop_current_process(self, cancel: bool = False) -> bool:
+        """
+        Stop the current interactive process/command.
+        
+        This is used to complete or cancel interactive commands that wait
+        for user input, such as ksCMCreateSheetFromModel (40373) which
+        normally waits for a mouse click to place the view.
+        
+        Args:
+            cancel: If False, accept/confirm the current state.
+                    If True, cancel and discard changes.
+            
+        Returns:
+            True if successful
+        """
+        try:
+            self._app.StopCurrentProcess(cancel)
+            logger.debug(f"StopCurrentProcess called with cancel={cancel}")
+            return True
+        except Exception as e:
+            logger.debug(f"StopCurrentProcess failed: {e}")
+            return False
+    
     def is_command_available(self, command_id: int) -> bool:
         """Check if a command is currently available."""
         try:

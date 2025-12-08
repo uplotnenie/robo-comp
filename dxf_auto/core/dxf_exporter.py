@@ -496,6 +496,10 @@ class DXFExporter:
         This command creates a 2D sketch/geometry from the active 3D model's flat pattern
         into the last created 2D document (fragment).
         
+        IMPORTANT: Command 40373 is INTERACTIVE - it opens a "Model View" panel and 
+        waits for user to click to place the view. We use StopCurrentProcess(False)
+        to automatically accept the placement without user interaction.
+        
         Args:
             doc: 3D document (must be active)
             fragment: 2D fragment to receive geometry (already created)
@@ -512,16 +516,25 @@ class DXFExporter:
             
             logger.debug("Executing CreateSheetFromModel command (40373)")
             
-            # Execute the command
-            # The command reads from the ACTIVE 3D document and writes to the LAST CREATED 2D document
+            # Execute the command - this opens the "Model View" placement panel
+            # The command reads from the ACTIVE 3D document
             result = self._api.execute_command(KompasCommand.CREATE_SHEET_FROM_MODEL, False)
             
             if not result:
                 logger.warning("CreateSheetFromModel command returned False")
                 # Don't return yet - the command might have worked anyway
             
-            # Add delay to ensure command completes
+            # CRITICAL: Give the command time to initialize the placement mode
             import time
+            time.sleep(0.3)
+            
+            # CRITICAL: Complete the interactive placement automatically!
+            # StopCurrentProcess(False) accepts/confirms the current state,
+            # placing the view at the default position without requiring user click.
+            logger.debug("Calling StopCurrentProcess to complete view placement")
+            self._api.stop_current_process(cancel=False)
+            
+            # Allow time for the view placement to complete
             time.sleep(0.5)
             
             # Activate the fragment to check if it has content and save it
