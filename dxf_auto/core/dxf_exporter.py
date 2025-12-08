@@ -13,6 +13,8 @@ import logging
 import os
 import threading
 import time
+import tempfile
+import shutil
 
 from .kompas_api import (
     KompasAPI,
@@ -368,8 +370,8 @@ class DXFExporter:
         """
         Export document to DXF format.
         
-        For 3D documents with sheet metal bodies, creates an associative view
-        in a 2D fragment to project the flat pattern, then saves as DXF.
+        For 3D documents with sheet metal bodies, uses IConverter for direct
+        conversion or creates an associative view in a 2D fragment.
         
         Args:
             doc: Document to export (should be 3D with straightened sheet metal)
@@ -384,13 +386,242 @@ class DXFExporter:
                 logger.debug("Document is 2D, saving directly as DXF")
                 return doc.save_as(str(output_path))
             
-            # Method 2: For 3D documents, use 2D fragment with associative view
-            logger.debug("Document is 3D, creating 2D projection for DXF export")
+            # Method 2: For 3D documents, try IConverter first (more reliable)
+            logger.debug("Document is 3D, trying IConverter approach")
+            if self._export_via_converter(doc, output_path):
+                return True
+            
+            # Method 3: Try Drawing with Associative View
+            logger.debug("IConverter failed, trying Drawing with AssociativeView")
+            if self._export_via_drawing_view(doc, output_path):
+                return True
+            
+            # Method 4: Fallback to 2D fragment with command 40373
+            logger.debug("AssociativeView failed, falling back to 2D fragment method")
             return self._export_via_2d_fragment(doc, output_path)
             
         except Exception as e:
             logger.error(f"DXF export error: {e}")
             return False
+    
+    def _export_via_converter(self, doc: KompasDocument, output_path: Path) -> bool:
+        """
+        Export 3D flat pattern to DXF using IConverter interface.
+        
+        This method:
+        1. Saves the straightened 3D model to a temporary file
+        2. Uses IConverter to convert the temp file to DXF
+        3. Cleans up the temporary file
+        
+        This is more reliable than the interactive command approach because
+        IConverter works non-interactively and doesn't require user input.
+        
+        Args:
+            doc: 3D document with straightened flat pattern
+            output_path: Output DXF file path
+            
+        Returns:
+            True if successful
+        """
+        temp_file = None
+        try:
+            source_path = doc.path_name
+            logger.debug(f"Exporting via IConverter from: {source_path}")
+            
+            # Step 1: Get the converter interface
+            converter = self._api.get_converter()
+            if converter is None:
+                logger.warning("IConverter not available")
+                return False
+            
+            logger.debug("Got IConverter interface")
+            
+            # Step 2: Create a temporary file path for the straightened model
+            # We need to save the current state (with flat pattern visible)
+            temp_dir = tempfile.gettempdir()
+            temp_name = f"dxf_export_temp_{os.getpid()}_{int(time.time())}.m3d"
+            temp_file = Path(temp_dir) / temp_name
+            
+            logger.debug(f"Saving temporary model to: {temp_file}")
+            
+            # Step 3: Save the document with flat pattern to temp file
+            # This preserves the straightened state in the temp file
+            if not doc.save_as(str(temp_file)):
+                logger.warning("Failed to save temporary model file")
+                return False
+            
+            logger.debug("Saved temporary model with flat pattern")
+            
+            # Step 4: Use IConverter to convert temp .m3d to .dxf
+            # Parameters: inputFile, outputFile, commandCode, showParams
+            try:
+                logger.debug(f"Converting {temp_file} -> {output_path}")
+                result = converter.Convert(
+                    str(temp_file),    # Input file (3D model with flat pattern)
+                    str(output_path),  # Output file (DXF)
+                    0,                 # Command code (0 = default/auto)
+                    False              # Don't show parameters dialog
+                )
+                logger.debug(f"IConverter.Convert returned: {result}")
+                
+                if result:
+                    # Verify the DXF was created
+                    if output_path.exists():
+                        file_size = output_path.stat().st_size
+                        if file_size > 500:  # Minimum size for valid DXF
+                            logger.info(f"IConverter export successful: {output_path} ({file_size} bytes)")
+                            return True
+                        else:
+                            logger.warning(f"IConverter created small file ({file_size} bytes)")
+                            return False
+                    else:
+                        logger.warning("IConverter returned True but file doesn't exist")
+                        return False
+                else:
+                    logger.warning("IConverter.Convert returned False")
+                    return False
+                    
+            except Exception as conv_error:
+                logger.warning(f"IConverter.Convert failed: {conv_error}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"IConverter export error: {e}")
+            return False
+            
+        finally:
+            # Step 5: Clean up temporary file
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                    logger.debug("Cleaned up temporary model file")
+                except Exception as cleanup_error:
+                    logger.debug(f"Failed to clean up temp file: {cleanup_error}")
+        
+        return False  # Should not reach here
+    
+    def _export_via_drawing_view(self, doc: KompasDocument, output_path: Path) -> bool:
+        """
+        Export 3D flat pattern to DXF using Drawing with Associative View.
+        
+        This method:
+        1. Saves the 3D model with flat pattern to a temp file
+        2. Creates a new Drawing document (ksDocumentDrawing, type=1)
+        3. Adds an associative view from the temp 3D file
+        4. Saves the drawing as DXF
+        5. Cleans up temporary files
+        
+        This approach uses IViewsCollection.AddAssociationView() which
+        is only available on Drawing documents (not fragments).
+        
+        Args:
+            doc: 3D document with straightened flat pattern
+            output_path: Output DXF file path
+            
+        Returns:
+            True if successful
+        """
+        temp_file = None
+        drawing = None
+        
+        try:
+            source_path = doc.path_name
+            logger.debug(f"Exporting via Drawing AssociativeView from: {source_path}")
+            
+            # Step 1: Save the 3D model with flat pattern to temp file
+            temp_dir = tempfile.gettempdir()
+            temp_name = f"dxf_export_temp_{os.getpid()}_{int(time.time())}.m3d"
+            temp_file = Path(temp_dir) / temp_name
+            
+            logger.debug(f"Saving temporary model to: {temp_file}")
+            if not doc.save_as(str(temp_file)):
+                logger.warning("Failed to save temporary model file")
+                return False
+            
+            # Step 2: Create a new Drawing document (type=1)
+            drawing = self._api.documents.add(DocumentType.DRAWING, visible=False)
+            if drawing is None:
+                logger.warning("Failed to create Drawing document")
+                return False
+            
+            logger.debug("Created Drawing document for associative view")
+            
+            # Step 3: Get the 2D document interface and add associative view
+            try:
+                # Get raw COM object for the drawing
+                drawing_2d = drawing._doc  # Access the underlying COM object
+                
+                # Try to get ViewsAndLayersManager
+                vlm = drawing_2d.ViewsAndLayersManager
+                if vlm is None:
+                    logger.warning("ViewsAndLayersManager not available")
+                    return False
+                
+                # Get Views collection
+                views = vlm.Views
+                if views is None:
+                    logger.warning("Views collection not available")
+                    return False
+                
+                # Add associative view pointing to the temp file
+                logger.debug("Adding associative view from temp model...")
+                assoc_view = views.AddAssociationView()
+                if assoc_view is None:
+                    logger.warning("Failed to create AssociationView")
+                    return False
+                
+                # Configure the view
+                assoc_view.SourceFileName = str(temp_file)
+                assoc_view.ProjectionName = "Top"  # Top view for flat pattern
+                assoc_view.X = 0.0
+                assoc_view.Y = 0.0
+                assoc_view.Scale = 1.0
+                assoc_view.Update()
+                
+                logger.debug("Associative view created and configured")
+                
+            except AttributeError as attr_err:
+                logger.warning(f"Drawing API not available: {attr_err}")
+                return False
+            except Exception as view_err:
+                logger.warning(f"Failed to create associative view: {view_err}")
+                return False
+            
+            # Step 4: Save drawing as DXF
+            time.sleep(0.3)  # Give KOMPAS time to render the view
+            
+            if drawing.save_as(str(output_path)):
+                # Verify the DXF was created
+                if output_path.exists():
+                    file_size = output_path.stat().st_size
+                    if file_size > 500:
+                        logger.info(f"Drawing export successful: {output_path} ({file_size} bytes)")
+                        return True
+                    else:
+                        logger.warning(f"Drawing created small DXF ({file_size} bytes)")
+                        return False
+            
+            logger.warning("Failed to save drawing as DXF")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Drawing view export error: {e}")
+            return False
+            
+        finally:
+            # Clean up
+            if drawing is not None:
+                try:
+                    drawing.close(save=False)
+                except:
+                    pass
+            
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                    logger.debug("Cleaned up temporary model file")
+                except:
+                    pass
     
     def _export_via_2d_fragment(self, doc: KompasDocument, output_path: Path) -> bool:
         """
