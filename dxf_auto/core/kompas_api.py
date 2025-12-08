@@ -1178,6 +1178,9 @@ class AssociativeView:
     
     Creates a 2D projection of a 3D model in a fragment/drawing.
     This is the proper way to export sheet metal flat patterns to DXF.
+    
+    The view reads from a 3D model FILE, so the model must be saved
+    with the desired state (e.g., straightened) before creating the view.
     """
     
     def __init__(self, view_object: Any):
@@ -1187,60 +1190,152 @@ class AssociativeView:
     def raw(self) -> Any:
         return self._view
     
-    def set_source_file(self, path: str):
-        """Set the source 3D model file path."""
+    def set_source_file(self, path: str) -> bool:
+        """
+        Set the source 3D model file path.
+        
+        Args:
+            path: Full path to the 3D model file (.m3d or .a3d)
+            
+        Returns:
+            True if successful
+        """
         try:
             self._view.SourceFileName = path
+            logger.debug(f"AssociativeView: Set source file to {path}")
+            return True
         except Exception as e:
             logger.error(f"Failed to set source file: {e}")
+            return False
     
-    def set_projection(self, projection_name: str):
+    def set_projection(self, projection_name: str) -> bool:
         """
         Set projection type.
         
-        Common projections: "Сверху" (Top), "Спереди" (Front), "Справа" (Right)
+        Common projections: 
+        - "Сверху" (Top) - best for flat patterns
+        - "Спереди" (Front)
+        - "Справа" (Right)
+        - "Изометрия XYZ" (Isometric)
+        
         For flat patterns, use "Сверху" (Top) view.
+        
+        Args:
+            projection_name: Name of the projection view
+            
+        Returns:
+            True if successful
         """
         try:
             self._view.ProjectionName = projection_name
+            logger.debug(f"AssociativeView: Set projection to {projection_name}")
+            return True
         except Exception as e:
             logger.error(f"Failed to set projection: {e}")
+            return False
     
-    def set_position(self, x: float, y: float):
-        """Set view position in the document."""
+    def set_position(self, x: float, y: float) -> bool:
+        """
+        Set view position in the document.
+        
+        Args:
+            x: X coordinate in mm
+            y: Y coordinate in mm
+            
+        Returns:
+            True if successful
+        """
         try:
             self._view.X = x
             self._view.Y = y
+            return True
         except Exception as e:
             logger.error(f"Failed to set position: {e}")
+            return False
     
-    def set_scale(self, scale: float):
-        """Set view scale."""
+    def set_scale(self, scale: float) -> bool:
+        """
+        Set view scale.
+        
+        Args:
+            scale: Scale factor (1.0 = 1:1)
+            
+        Returns:
+            True if successful
+        """
         try:
             self._view.Scale = scale
+            return True
         except Exception as e:
             logger.error(f"Failed to set scale: {e}")
+            return False
     
-    def set_angle(self, angle: float):
-        """Set view rotation angle (radians)."""
+    def set_angle(self, angle: float) -> bool:
+        """
+        Set view rotation angle.
+        
+        Args:
+            angle: Rotation angle in radians
+            
+        Returns:
+            True if successful
+        """
         try:
             self._view.Angle = angle
+            return True
         except Exception as e:
             logger.error(f"Failed to set angle: {e}")
+            return False
     
-    def set_hidden_lines(self, show: bool, visible: bool = False):
-        """Configure hidden lines display."""
+    def set_hidden_lines(self, show: bool, visible: bool = False) -> bool:
+        """
+        Configure hidden lines display.
+        
+        Args:
+            show: Whether to include hidden lines
+            visible: Whether hidden lines should be visible (dashed)
+            
+        Returns:
+            True if successful
+        """
         try:
             self._view.HiddenLines = show
             if show:
                 self._view.HiddenLinesVisible = visible
+            return True
         except Exception as e:
             logger.error(f"Failed to set hidden lines: {e}")
+            return False
+    
+    def set_tangent_edges(self, show: bool) -> bool:
+        """
+        Configure tangent edges display.
+        
+        Args:
+            show: Whether to show tangent edges
+            
+        Returns:
+            True if successful
+        """
+        try:
+            self._view.ShowTangentEdges = show
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to set tangent edges: {e}")
+            return False
     
     def update(self) -> bool:
-        """Update the view to regenerate geometry."""
+        """
+        Update the view to regenerate geometry from the source model.
+        
+        This must be called after setting all view properties.
+        
+        Returns:
+            True if successful
+        """
         try:
             self._view.Update()
+            logger.debug("AssociativeView: Updated successfully")
             return True
         except Exception as e:
             logger.error(f"Failed to update view: {e}")
@@ -1271,30 +1366,58 @@ class ViewsCollection:
     
     def add_associative_view(self) -> Optional[AssociativeView]:
         """
-        Add a new associative view.
+        Add a new associative view for projecting 3D models.
+        
+        An associative view creates a 2D projection from a 3D model file.
+        After adding, configure the view with source file, projection type, etc.
         
         Returns:
-            AssociativeView or None if failed
+            AssociativeView wrapper or None if failed
         """
         try:
-            # Try different methods to add associative view
             view = None
             
-            # Method 1: AddAssociationView()
+            # Method 1: AddAssociationView() - most common API
             try:
                 view = self._views.AddAssociationView()
-            except:
-                pass
+                if view:
+                    logger.debug("Created associative view via AddAssociationView()")
+            except Exception as e:
+                logger.debug(f"AddAssociationView() failed: {e}")
             
-            # Method 2: Add() with view type parameter
+            # Method 2: AssociationView property/method
+            if view is None:
+                try:
+                    view = self._views.AssociationView
+                    if view:
+                        logger.debug("Created associative view via AssociationView property")
+                except Exception as e:
+                    logger.debug(f"AssociationView property failed: {e}")
+            
+            # Method 3: Add() with type parameter
+            if view is None:
+                try:
+                    # Some API versions use Add(viewType) where type indicates associative
+                    view = self._views.Add(1)  # 1 might be associative view type
+                    if view:
+                        logger.debug("Created view via Add(1)")
+                except Exception as e:
+                    logger.debug(f"Add(1) failed: {e}")
+            
+            # Method 4: Create via ViewManager
             if view is None:
                 try:
                     view = self._views.Add()
-                except:
-                    pass
+                    if view:
+                        logger.debug("Created view via Add()")
+                except Exception as e:
+                    logger.debug(f"Add() failed: {e}")
             
             if view:
                 return AssociativeView(view)
+            else:
+                logger.error("All methods to add associative view failed")
+                
         except Exception as e:
             logger.error(f"Failed to add associative view: {e}")
         return None
