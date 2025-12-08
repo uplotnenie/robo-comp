@@ -11,8 +11,8 @@ from pathlib import Path
 from datetime import datetime
 import logging
 import os
-import tempfile
-import shutil
+import threading
+import time
 
 from .kompas_api import (
     KompasAPI,
@@ -394,18 +394,20 @@ class DXFExporter:
     
     def _export_via_2d_fragment(self, doc: KompasDocument, output_path: Path) -> bool:
         """
-        Export 3D flat pattern via 2D fragment using IAssociativeView.
+        Export 3D flat pattern via 2D fragment using interactive command.
         
-        This method creates a 2D projection of the straightened sheet metal body
-        using the IAssociativeView API (NOT the interactive command 40373).
+        This method uses the KOMPAS command ksCMCreateSheetFromModel (40373)
+        which creates a 2D view from a 3D model. Since this is an interactive
+        command that normally requires user to click to place the view, we use
+        a threaded approach to auto-complete it.
         
         The approach:
-        1. Save the 3D model (with flat pattern) to a temporary file
+        1. Activate the 3D document with straightened flat pattern
         2. Create a new 2D fragment document
-        3. Create an IAssociativeView that references the temp 3D model
-        4. Configure the view (position, scale, projection)
-        5. Update the view to generate 2D geometry
-        6. Export the fragment as DXF
+        3. Start a timer to auto-complete the command after a short delay
+        4. Execute command 40373 (CreateSheetFromModel)
+        5. The timer fires and completes the command (places view at default position)
+        6. Save the fragment as DXF
         
         Args:
             doc: 3D document with straightened flat pattern (already straightened)
@@ -415,50 +417,126 @@ class DXFExporter:
             True if successful
         """
         fragment = None
-        temp_dir = None
+        
+        # Command constant
+        CREATE_SHEET_FROM_MODEL = 40373  # ksCMCreateSheetFromModel
         
         try:
             source_path = doc.path_name
             logger.debug(f"Exporting flat pattern from: {source_path}")
             
-            # CRITICAL: Ensure 3D document is active
+            # Step 1: Ensure 3D document is active (source for the view)
             doc.activate()
             logger.debug("Activated 3D document")
             
-            # Step 1: Save the 3D model to a temp file (with straightened flat pattern)
-            # This is required because IAssociativeView references a FILE, not the open document
-            temp_dir = tempfile.mkdtemp(prefix="kompas_dxf_")
-            original_name = Path(source_path).stem if source_path else "temp_model"
-            temp_model_path = Path(temp_dir) / f"{original_name}_flat.m3d"
+            # Allow KOMPAS to fully activate the document
+            time.sleep(0.2)
             
-            logger.debug(f"Saving straightened model to temp file: {temp_model_path}")
-            if not doc.save_as(str(temp_model_path)):
-                logger.error("Failed to save 3D model to temp file")
-                return False
-            
-            # Verify temp file exists and has content
-            if not temp_model_path.exists() or temp_model_path.stat().st_size < 1000:
-                logger.error(f"Temp model file is missing or too small: {temp_model_path}")
-                return False
-            logger.debug(f"Temp model saved successfully: {temp_model_path.stat().st_size} bytes")
-            
-            # Step 2: Create new 2D fragment document
-            fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=True)
+            # Step 2: Create new 2D fragment document (target)
+            # Creating as INVISIBLE is important - it prevents the fragment from
+            # becoming the active document and keeps the 3D model active
+            fragment = self._api.documents.add(DocumentType.FRAGMENT, visible=False)
             if fragment is None:
                 logger.error("Failed to create 2D fragment document")
                 return False
-            logger.debug("Created 2D fragment for flat pattern view")
+            logger.debug("Created 2D fragment for flat pattern view (invisible)")
             
-            # Step 3: Create associative view from the temp model
-            success = self._create_associative_view_in_fragment(
-                fragment, temp_model_path, output_path
-            )
+            # Ensure 3D document is still active - the command works FROM the 3D model
+            # The command 40373 creates a view from the active 3D document
+            doc.activate()
+            time.sleep(0.2)
+            logger.debug("Ensured 3D document is active for command execution")
+            
+            # Step 3: Set up auto-completion via threading
+            # The command 40373 is interactive - it waits for user to place the view
+            # We use a timer to call StopCurrentProcess() which completes the command
+            
+            command_completed = threading.Event()
+            command_success = [False]  # Use list to allow modification in nested function
+            
+            def auto_complete_command():
+                """Background function to auto-complete the interactive command."""
+                try:
+                    # Wait a bit for the command to start and show its dialog/cursor
+                    time.sleep(0.5)
+                    
+                    # Method 1: Call StopCurrentProcess to accept/complete the operation
+                    # False = accept (confirm), True = cancel
+                    logger.debug("Auto-completing command via StopCurrentProcess(False)...")
+                    result = self._api.stop_current_process(cancel=False)
+                    logger.debug(f"StopCurrentProcess result: {result}")
+                    
+                    # Method 2: If StopCurrentProcess didn't work, try sending Enter key
+                    if not result:
+                        time.sleep(0.3)
+                        logger.debug("Trying keyboard Enter simulation...")
+                        try:
+                            # Try using win32api to send Enter key to KOMPAS window
+                            import win32api  # type: ignore
+                            import win32con  # type: ignore
+                            # VK_RETURN = 0x0D (Enter key)
+                            win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
+                            time.sleep(0.05)
+                            win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+                            logger.debug("Sent Enter key via win32api")
+                        except ImportError:
+                            logger.debug("win32api not available for keyboard simulation")
+                        except Exception as ke:
+                            logger.debug(f"Keyboard simulation failed: {ke}")
+                    
+                    # Method 3: Try StopCurrentProcess again after delay
+                    time.sleep(0.2)
+                    self._api.stop_current_process(cancel=False)
+                    
+                    command_success[0] = True
+                except Exception as e:
+                    logger.error(f"Auto-complete thread error: {e}")
+                finally:
+                    command_completed.set()
+            
+            # Start the auto-complete timer
+            timer_thread = threading.Thread(target=auto_complete_command, daemon=True)
+            timer_thread.start()
+            
+            # Step 4: Execute the interactive command
+            logger.debug("Executing CreateSheetFromModel command (40373)...")
+            cmd_result = self._api.execute_command(CREATE_SHEET_FROM_MODEL, post=False)
+            logger.debug(f"Command execution returned: {cmd_result}")
+            
+            # Wait for auto-complete to finish (with timeout)
+            command_completed.wait(timeout=5.0)
+            
+            if not command_completed.is_set():
+                logger.warning("Auto-complete thread timed out, command may still be active")
+            
+            # Give KOMPAS time to process the view creation
+            time.sleep(0.5)
+            
+            # Step 5: Activate fragment and save as DXF
+            fragment.activate()
+            time.sleep(0.3)
+            
+            logger.debug(f"Saving fragment as DXF: {output_path}")
+            success = fragment.save_as(str(output_path))
             
             if success:
-                return True
-            
-            logger.error("Failed to create associative view")
-            return False
+                # Verify the file was created and has content
+                if output_path.exists():
+                    file_size = output_path.stat().st_size
+                    # DXF files with actual geometry should be at least a few KB
+                    if file_size > 500:
+                        logger.info(f"Successfully exported DXF: {output_path} ({file_size} bytes)")
+                        return True
+                    else:
+                        logger.warning(f"DXF file too small ({file_size} bytes) - view may be empty")
+                        # Try alternative: the command may not have worked
+                        return False
+                else:
+                    logger.error("DXF file was not created")
+                    return False
+            else:
+                logger.error("Failed to save fragment as DXF")
+                return False
             
         except Exception as e:
             logger.exception(f"Fragment export error: {e}")
@@ -471,152 +549,6 @@ class DXFExporter:
                     fragment.close(save=False)
                 except:
                     pass
-            
-            # Cleanup temp directory
-            if temp_dir:
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except:
-                    pass
-    
-    def _create_associative_view_in_fragment(
-        self,
-        fragment: KompasDocument,
-        source_model_path: Path,
-        output_path: Path
-    ) -> bool:
-        """
-        Create an associative view in the fragment and export to DXF.
-        
-        This is the core export logic using IAssociativeView API.
-        
-        Args:
-            fragment: 2D fragment document
-            source_model_path: Path to saved 3D model with flat pattern
-            output_path: Output DXF file path
-            
-        Returns:
-            True if successful
-        """
-        try:
-            # Get 2D document interface
-            doc_2d = fragment.get_2d_document()
-            if doc_2d is None:
-                logger.error("Failed to get 2D document interface from fragment")
-                return False
-            logger.debug("Got 2D document interface")
-            
-            # Get views and layers manager
-            vl_manager = doc_2d.views_and_layers_manager
-            if vl_manager is None:
-                logger.error("Failed to get ViewsAndLayersManager")
-                return False
-            logger.debug("Got ViewsAndLayersManager")
-            
-            # Get views collection
-            views_collection = vl_manager.views_collection
-            if views_collection is None:
-                logger.error("Failed to get views collection")
-                return False
-            logger.debug(f"Got views collection (existing views: {views_collection.count})")
-            
-            # Add associative view
-            assoc_view = views_collection.add_associative_view()
-            if assoc_view is None:
-                logger.error("Failed to add associative view - AddAssociationView() returned None")
-                return False
-            logger.debug("Created associative view object")
-            
-            # Configure the view
-            # Step 1: Set source 3D model file (MUST be absolute path)
-            abs_path = str(source_model_path.resolve())
-            logger.debug(f"Setting source file: {abs_path}")
-            if not assoc_view.set_source_file(abs_path):
-                logger.error(f"Failed to set source file: {abs_path}")
-                return False
-            logger.debug("Source file set successfully")
-            
-            # Step 2: Set projection - try multiple standard projection names
-            # For sheet metal flat patterns, we want a "top" view perpendicular to the sheet
-            # Standard KOMPAS projections: Спереди, Сзади, Слева, Справа, Сверху, Снизу, Изометрия
-            projection_names = [
-                "#Сверху",      # Top view with hash (internal reference)
-                "Сверху",       # Top view (Russian)
-                "#Спереди",     # Front view with hash
-                "Спереди",      # Front view (Russian)
-                "#XY",          # XY plane
-                "XY",           # XY plane
-                "Top",          # English
-                "Front",        # English
-                "#Изометрия XYZ",  # Isometric (fallback)
-            ]
-            
-            projection_set = False
-            for proj_name in projection_names:
-                logger.debug(f"Trying projection: {proj_name}")
-                if assoc_view.set_projection(proj_name):
-                    projection_set = True
-                    logger.info(f"Projection set successfully: {proj_name}")
-                    break
-                    
-            if not projection_set:
-                logger.warning("Could not set any standard projection, using default")
-            
-            # Step 3: Set view position (center of typical A4 sheet)
-            # Fragment default size is usually around 210x297mm (A4)
-            # Place view at reasonable position
-            assoc_view.set_position(105.0, 148.5)  # Center of A4
-            assoc_view.set_scale(1.0)  # 1:1 scale
-            assoc_view.set_angle(0.0)  # No rotation
-            logger.debug("View position and scale set")
-            
-            # Step 4: Configure display options for flat pattern
-            assoc_view.set_hidden_lines(False)  # No hidden lines needed
-            assoc_view.set_tangent_edges(False)  # No tangent edges
-            logger.debug("Display options configured")
-            
-            # Step 5: Update the view to generate geometry
-            # This is the critical step that creates the actual 2D geometry
-            logger.debug("Calling Update() to generate 2D geometry...")
-            if not assoc_view.update():
-                logger.error("AssociativeView.Update() failed")
-                return False
-            logger.info("AssociativeView updated - 2D geometry should be generated")
-            
-            # Give KOMPAS time to process the view
-            import time
-            time.sleep(0.5)
-            
-            # Activate fragment before saving
-            fragment.activate()
-            
-            # Additional delay for view to fully render
-            time.sleep(0.3)
-            
-            # Step 6: Save as DXF
-            logger.debug(f"Saving fragment as DXF: {output_path}")
-            success = fragment.save_as(str(output_path))
-            
-            if success:
-                # Verify the file was created and has content
-                if output_path.exists():
-                    file_size = output_path.stat().st_size
-                    if file_size > 100:
-                        logger.info(f"Successfully exported DXF: {output_path} ({file_size} bytes)")
-                        return True
-                    else:
-                        logger.warning(f"DXF file too small ({file_size} bytes) - view may be empty")
-                        return False
-                else:
-                    logger.error("DXF file was not created")
-                    return False
-            else:
-                logger.error("Failed to save fragment as DXF")
-                return False
-                
-        except Exception as e:
-            logger.exception(f"Associative view creation error: {e}")
-            return False
     
     def _generate_output_path(self, part_info: SheetPartInfo, index: int) -> Path:
         """
